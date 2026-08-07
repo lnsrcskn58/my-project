@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using TMPro; // UI ve TextMeshPro için eklendi
 
 [System.Serializable]
 public struct OneWayEdge
@@ -46,11 +47,18 @@ public class GameManager : MonoBehaviour
     public GameObject columnPrefab;
     public GameObject oneWayPrefab;
     
+    [Header("UI (Arayüz) Referansları")]
+    public TextMeshProUGUI levelText;
+    public TextMeshProUGUI movesText;
+    public GameObject winPanel;
+    public GameObject losePanel;
+    public TextMeshProUGUI loseReasonText; // (İsteğe bağlı) Neden kaybedildiğini yazmak için
+    
     [Header("Oyun Durumu")]
     public int currentLevelId = 1;
+    public bool isGameOver = false; // Oyun bitince hareketi kilitlemek için
     public List<Stone> activeStones = new List<Stone>();
     private List<GameObject> spawnedVisuals = new List<GameObject>();
-    
     private Stack<GameStateSnapshot> undoStack = new Stack<GameStateSnapshot>();
 
     [Header("Oyun Kuralları")]
@@ -78,7 +86,8 @@ public class GameManager : MonoBehaviour
 
     void Update()
     {
-        if (Input.GetKeyDown(KeyCode.U))
+        // Oyun bitmediyse geri al tuşu çalışsın
+        if (!isGameOver && Input.GetKeyDown(KeyCode.U))
         {
             UndoMove();
         }
@@ -109,35 +118,39 @@ public class GameManager : MonoBehaviour
         maxMoves = data.maxMoves;
         movesMade = 0;
         hasThrone = false; 
+        isGameOver = false; // Yeni bölüm başlıyor, oyun aktif
 
-        if (data.walls != null)
-            foreach (var w in data.walls) walls.Add(new HexCoord(w.q, w.r));
-            
-        if (data.sticky != null)
-            foreach (var s in data.sticky) stickyTiles.Add(new HexCoord(s.q, s.r));
-            
-        if (data.column != null)
-            foreach (var c in data.column) columns.Add(new HexCoord(c.q, c.r));
+        // UI Panellerini Kapat ve Yazıları Güncelle
+        if (winPanel != null) winPanel.SetActive(false);
+        if (losePanel != null) losePanel.SetActive(false);
+        if (levelText != null) levelText.text = $"Bölüm {levelId}";
+        UpdateMovesUI();
 
+        if (data.walls != null) foreach (var w in data.walls) walls.Add(new HexCoord(w.q, w.r));
+        if (data.sticky != null) foreach (var s in data.sticky) stickyTiles.Add(new HexCoord(s.q, s.r));
+        if (data.column != null) foreach (var c in data.column) columns.Add(new HexCoord(c.q, c.r));
         if (data.oneWayEdges != null)
         {
             foreach (var edge in data.oneWayEdges)
-            {
                 oneWayEdges.Add(new OneWayEdge(new HexCoord(edge.q1, edge.r1), new HexCoord(edge.q2, edge.r2)));
-            }
         }
 
         DrawBoardVisuals();
 
         if (data.stones != null)
         {
-            foreach (var s in data.stones)
-            {
-                SpawnStone(s.q, s.r, s.type[0], s.heavy, s.bomb);
-            }
+            foreach (var s in data.stones) SpawnStone(s.q, s.r, s.type[0], s.heavy, s.bomb);
         }
+    }
 
-        Debug.Log($"Bölüm {levelId} yüklendi!");
+    void UpdateMovesUI()
+    {
+        if (movesText != null)
+        {
+            movesText.text = $"Hamle: {movesMade} / {maxMoves}";
+            // İstersen son 1-2 hamle kala rengi kırmızı yapabilirsin:
+            movesText.color = (maxMoves - movesMade <= 1) ? Color.red : Color.white;
+        }
     }
 
     void DrawBoardVisuals()
@@ -153,16 +166,10 @@ public class GameManager : MonoBehaviour
     {
         foreach (var stone in activeStones) Destroy(stone.gameObject);
         activeStones.Clear();
-
         foreach (var visual in spawnedVisuals) Destroy(visual);
         spawnedVisuals.Clear();
 
-        walls.Clear();
-        stickyTiles.Clear();
-        columns.Clear();
-        dynamicWalls.Clear();
-        oneWayEdges.Clear();
-        
+        walls.Clear(); stickyTiles.Clear(); columns.Clear(); dynamicWalls.Clear(); oneWayEdges.Clear();
         undoStack.Clear(); 
     }
 
@@ -170,18 +177,15 @@ public class GameManager : MonoBehaviour
     {
         if (prefab == null) return;
         Vector2 localPos = gridManager.GetPixelCoords(coord.q, coord.r);
-        
         GameObject tile = Instantiate(prefab, gridManager.transform);
         tile.transform.localPosition = localPos;
         tile.transform.localRotation = Quaternion.Euler(0, 0, 30f);
-        
         spawnedVisuals.Add(tile);
     }
 
     void SpawnOneWayVisual(OneWayEdge edge)
     {
         if (oneWayPrefab == null) return;
-
         Vector2 p1 = gridManager.GetPixelCoords(edge.from.q, edge.from.r);
         Vector2 p2 = gridManager.GetPixelCoords(edge.to.q, edge.to.r);
         Vector2 midPoint = (p1 + p2) / 2f;
@@ -190,7 +194,6 @@ public class GameManager : MonoBehaviour
         GameObject arrow = Instantiate(oneWayPrefab, gridManager.transform);
         arrow.transform.localPosition = midPoint;
         arrow.transform.localRotation = Quaternion.Euler(0, 0, angle - 90f);
-        
         spawnedVisuals.Add(arrow);
     }
 
@@ -199,7 +202,6 @@ public class GameManager : MonoBehaviour
         Vector2 localPos = gridManager.GetPixelCoords(q, r);
         GameObject stoneObj = Instantiate(stonePrefab, gridManager.transform);
         stoneObj.transform.localPosition = localPos;
-        
         Stone stone = stoneObj.GetComponent<Stone>();
         stone.Initialize(q, r, type, isHeavy, bombTimer);
         activeStones.Add(stone);
@@ -219,15 +221,12 @@ public class GameManager : MonoBehaviour
                 q = s.q, r = s.r, type = s.type, isHeavy = s.isHeavy, bombTimer = s.bombTimer, isDead = s.isDead
             });
         }
-        
         undoStack.Push(snap);
     }
 
-    // --- UI BUTONLARI İÇİN FONKSİYONLAR BURADA ---
-
     public void UndoMove()
     {
-        if (undoStack.Count == 0) return;
+        if (undoStack.Count == 0 || isGameOver) return;
 
         GameStateSnapshot snap = undoStack.Pop();
 
@@ -243,11 +242,10 @@ public class GameManager : MonoBehaviour
         DrawBoardVisuals();
         foreach (var sSnap in snap.stones)
         {
-            if (!sSnap.isDead) 
-            {
-                SpawnStone(sSnap.q, sSnap.r, sSnap.type, sSnap.isHeavy, sSnap.bombTimer);
-            }
+            if (!sSnap.isDead) SpawnStone(sSnap.q, sSnap.r, sSnap.type, sSnap.isHeavy, sSnap.bombTimer);
         }
+        
+        UpdateMovesUI();
     }
 
     public void RestartLevel()
@@ -261,25 +259,22 @@ public class GameManager : MonoBehaviour
         LoadLevel(currentLevelId);
     }
 
-    // ----------------------------------------------
-
     public void ProcessMove(int dq, int dr)
     {
-        SaveState(); 
+        if (isGameOver) return; // Oyun bittiyse hareket ettirme
 
+        SaveState(); 
         bool movedAnything = false;
         activeStones.Sort((a, b) => (b.q * dq + b.r * dr).CompareTo(a.q * dq + a.r * dr));
 
         foreach (Stone stone in activeStones)
         {
             if (stone.isDead) continue;
-            int currentQ = stone.q;
-            int currentR = stone.r;
+            int currentQ = stone.q; int currentR = stone.r;
 
             while (true)
             {
-                int nextQ = currentQ + dq;
-                int nextR = currentR + dr;
+                int nextQ = currentQ + dq; int nextR = currentR + dr;
                 HexCoord currentCoord = new HexCoord(currentQ, currentR);
                 HexCoord nextCoord = new HexCoord(nextQ, nextR);
 
@@ -297,9 +292,7 @@ public class GameManager : MonoBehaviour
                     {
                         targetStone.isDead = true;
                         targetStone.gameObject.SetActive(false);
-                        
-                        currentQ = nextQ;
-                        currentR = nextR;
+                        currentQ = nextQ; currentR = nextR;
                         movedAnything = true;
                         
                         if (isColumn) HandleColumnDestroyed(nextCoord);
@@ -309,10 +302,8 @@ public class GameManager : MonoBehaviour
                 }
                 else
                 {
-                    currentQ = nextQ;
-                    currentR = nextR;
+                    currentQ = nextQ; currentR = nextR;
                     movedAnything = true;
-                    
                     if (isColumn) HandleColumnDestroyed(nextCoord);
                     if (isSticky || stone.isHeavy) break;
                 }
@@ -320,14 +311,14 @@ public class GameManager : MonoBehaviour
 
             if (currentQ != stone.q || currentR != stone.r)
             {
-                stone.q = currentQ;
-                stone.r = currentR;
+                stone.q = currentQ; stone.r = currentR;
                 Vector2 targetLocalPos = gridManager.GetPixelCoords(stone.q, stone.r);
                 StartCoroutine(SlideStone(stone, targetLocalPos));
             }
         }
         
         movesMade++;
+        UpdateMovesUI(); // Arayüzdeki sayacı güncelle
 
         if (movedAnything) ProcessBombTimers();
         
@@ -339,9 +330,7 @@ public class GameManager : MonoBehaviour
         foreach (var edge in oneWayEdges)
         {
             if ((edge.from == from && edge.to == to) || (edge.from == to && edge.to == from))
-            {
                 if (!(from == edge.from && to == edge.to)) return true;
-            }
         }
         return false;
     }
@@ -361,7 +350,13 @@ public class GameManager : MonoBehaviour
             {
                 stone.bombTimer--;
                 stone.UpdateVisualModifiers();
-                if (stone.bombTimer == 0) Debug.Log("💥 BOMBA PATLADI! GÖREV BAŞARISIZ 💥");
+                
+                if (stone.bombTimer == 0)
+                {
+                    isGameOver = true;
+                    if (losePanel != null) losePanel.SetActive(true);
+                    if (loseReasonText != null) loseReasonText.text = "BOMBA PATLADI!";
+                }
             }
         }
     }
@@ -388,31 +383,37 @@ public class GameManager : MonoBehaviour
     
     public void CheckGameState()
     {
+        if (isGameOver) return; // Bomba patladıysa aşağıdaki hamle kontrollerini yapma
+
         var aliveStones = activeStones.Where(s => !s.isDead).ToList();
         
         if (aliveStones.Count == 1)
         {
+            isGameOver = true;
             if (hasThrone)
             {
                 if (aliveStones[0].q == targetThrone.q && aliveStones[0].r == targetThrone.r)
                 {
-                    Debug.Log("🎉 KAZANDIN! Hedef Tahta ulaşıldı.");
+                    if (winPanel != null) winPanel.SetActive(true);
                 }
                 else
                 {
-                    Debug.Log("❌ KAYBETTİN! Son taş tahtta değil.");
+                    if (losePanel != null) losePanel.SetActive(true);
+                    if (loseReasonText != null) loseReasonText.text = "Hedef tahta ulaşamadın!";
                 }
             }
             else
             {
-                Debug.Log("🎉 KAZANDIN! Bölüm temizlendi.");
+                if (winPanel != null) winPanel.SetActive(true);
             }
             return;
         }
 
         if (movesMade >= maxMoves)
         {
-            Debug.Log("💀 KAYBETTİN! Hamle sınırını aştın.");
+            isGameOver = true;
+            if (losePanel != null) losePanel.SetActive(true);
+            if (loseReasonText != null) loseReasonText.text = "Hamle sınırını aştın!";
         }
     }
 }
