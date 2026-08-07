@@ -2,19 +2,14 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using TMPro; // UI ve TextMeshPro için eklendi
+using TMPro; 
 
 [System.Serializable]
 public struct OneWayEdge
 {
     public HexCoord from;
     public HexCoord to;
-
-    public OneWayEdge(HexCoord from, HexCoord to)
-    {
-        this.from = from;
-        this.to = to;
-    }
+    public OneWayEdge(HexCoord from, HexCoord to) { this.from = from; this.to = to; }
 }
 
 [System.Serializable]
@@ -48,15 +43,18 @@ public class GameManager : MonoBehaviour
     public GameObject oneWayPrefab;
     
     [Header("UI (Arayüz) Referansları")]
+    public GameObject mainMenuPanel;    // YENİ: Ana Menü
+    public GameObject levelSelectPanel; // YENİ: Bölüm Seçim Ekranı
+    public GameObject gameUIPanel;      // YENİ: Oyun İçi HUD (TopBar)
     public TextMeshProUGUI levelText;
     public TextMeshProUGUI movesText;
     public GameObject winPanel;
     public GameObject losePanel;
-    public TextMeshProUGUI loseReasonText; // (İsteğe bağlı) Neden kaybedildiğini yazmak için
     
-    [Header("Oyun Durumu")]
+    [Header("Oyun Durumu & Kayıt Sistemi")]
     public int currentLevelId = 1;
-    public bool isGameOver = false; // Oyun bitince hareketi kilitlemek için
+    public int unlockedLevel = 1;       // YENİ: Kilidi açılmış en son bölüm
+    public bool isGameOver = false; 
     public List<Stone> activeStones = new List<Stone>();
     private List<GameObject> spawnedVisuals = new List<GameObject>();
     private Stack<GameStateSnapshot> undoStack = new Stack<GameStateSnapshot>();
@@ -81,46 +79,85 @@ public class GameManager : MonoBehaviour
 
     void Start()
     {
-        LoadLevel(currentLevelId);
+        // Kayıtlı ilerlemeyi yükle (Kayıt yoksa 1. bölümden başlar)
+        unlockedLevel = PlayerPrefs.GetInt("UnlockedLevel", 1);
+        
+        // Oyun ilk açıldığında Ana Menüyü göster
+        ShowMainMenu();
     }
 
     void Update()
     {
-        // Oyun bitmediyse geri al tuşu çalışsın
-        if (!isGameOver && Input.GetKeyDown(KeyCode.U))
+        // Oyun bitmediyse ve ana menüde değilsek geri al tuşu çalışsın
+        if (!isGameOver && !mainMenuPanel.activeSelf && Input.GetKeyDown(KeyCode.U))
         {
             UndoMove();
         }
     }
+
+    // --- MENÜ SİSTEMİ FONKSİYONLARI ---
+
+    public void ShowMainMenu()
+    {
+        ClearBoard();
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(true);
+        if (levelSelectPanel != null) levelSelectPanel.SetActive(false);
+        if (gameUIPanel != null) gameUIPanel.SetActive(false);
+        if (winPanel != null) winPanel.SetActive(false);
+        if (losePanel != null) losePanel.SetActive(false);
+    }
+
+    public void ShowLevelSelect()
+    {
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (levelSelectPanel != null) levelSelectPanel.SetActive(true);
+    }
+
+    public void StartGameFromMenu()
+    {
+        // En son kilidi açılan (kaldığı) bölümden başlat
+        LoadSpecificLevel(unlockedLevel);
+    }
+
+    public void LoadSpecificLevel(int levelId)
+    {
+        // Kilitli bir bölüme girmeye çalışırsa engelle
+        if (levelId > unlockedLevel) 
+        {
+            Debug.Log("Bu bölüm henüz kilitli!");
+            return; 
+        }
+        
+        currentLevelId = levelId;
+        
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (levelSelectPanel != null) levelSelectPanel.SetActive(false);
+        if (gameUIPanel != null) gameUIPanel.SetActive(true);
+        
+        LoadLevel(currentLevelId);
+    }
+
+    // ---------------------------------
 
     public void LoadLevel(int levelId)
     {
         ClearBoard();
 
         TextAsset jsonText = Resources.Load<TextAsset>("levels");
-        if (jsonText == null)
-        {
-            Debug.LogError("levels.json dosyası Resources klasöründe bulunamadı!");
-            return;
-        }
+        if (jsonText == null) return;
 
         LevelList allLevels = JsonUtility.FromJson<LevelList>(jsonText.text);
         LevelItem levelToLoad = allLevels.levels.FirstOrDefault(l => l.id == levelId);
         
-        if (levelToLoad == null)
-        {
-            Debug.LogError($"Bölüm {levelId} bulunamadı!");
-            return;
-        }
+        if (levelToLoad == null) return;
 
         LevelDetails data = levelToLoad.data;
 
         maxMoves = data.maxMoves;
         movesMade = 0;
         hasThrone = false; 
-        isGameOver = false; // Yeni bölüm başlıyor, oyun aktif
+        isGameOver = false; 
 
-        // UI Panellerini Kapat ve Yazıları Güncelle
         if (winPanel != null) winPanel.SetActive(false);
         if (losePanel != null) losePanel.SetActive(false);
         if (levelText != null) levelText.text = $"Bölüm {levelId}";
@@ -138,9 +175,7 @@ public class GameManager : MonoBehaviour
         DrawBoardVisuals();
 
         if (data.stones != null)
-        {
             foreach (var s in data.stones) SpawnStone(s.q, s.r, s.type[0], s.heavy, s.bomb);
-        }
     }
 
     void UpdateMovesUI()
@@ -148,7 +183,6 @@ public class GameManager : MonoBehaviour
         if (movesText != null)
         {
             movesText.text = $"Hamle: {movesMade} / {maxMoves}";
-            // İstersen son 1-2 hamle kala rengi kırmızı yapabilirsin:
             movesText.color = (maxMoves - movesMade <= 1) ? Color.red : Color.white;
         }
     }
@@ -227,7 +261,6 @@ public class GameManager : MonoBehaviour
     public void UndoMove()
     {
         if (undoStack.Count == 0 || isGameOver) return;
-
         GameStateSnapshot snap = undoStack.Pop();
 
         foreach (var stone in activeStones) Destroy(stone.gameObject);
@@ -248,20 +281,12 @@ public class GameManager : MonoBehaviour
         UpdateMovesUI();
     }
 
-    public void RestartLevel()
-    {
-        LoadLevel(currentLevelId);
-    }
-
-    public void NextLevel()
-    {
-        currentLevelId++;
-        LoadLevel(currentLevelId);
-    }
+    public void RestartLevel() { LoadLevel(currentLevelId); }
+    public void NextLevel() { currentLevelId++; LoadLevel(currentLevelId); }
 
     public void ProcessMove(int dq, int dr)
     {
-        if (isGameOver) return; // Oyun bittiyse hareket ettirme
+        if (isGameOver) return; 
 
         SaveState(); 
         bool movedAnything = false;
@@ -290,11 +315,8 @@ public class GameManager : MonoBehaviour
                 {
                     if (Beats(stone.type, targetStone.type))
                     {
-                        targetStone.isDead = true;
-                        targetStone.gameObject.SetActive(false);
-                        currentQ = nextQ; currentR = nextR;
-                        movedAnything = true;
-                        
+                        targetStone.isDead = true; targetStone.gameObject.SetActive(false);
+                        currentQ = nextQ; currentR = nextR; movedAnything = true;
                         if (isColumn) HandleColumnDestroyed(nextCoord);
                         if (isSticky || stone.isHeavy) break;
                     }
@@ -302,8 +324,7 @@ public class GameManager : MonoBehaviour
                 }
                 else
                 {
-                    currentQ = nextQ; currentR = nextR;
-                    movedAnything = true;
+                    currentQ = nextQ; currentR = nextR; movedAnything = true;
                     if (isColumn) HandleColumnDestroyed(nextCoord);
                     if (isSticky || stone.isHeavy) break;
                 }
@@ -318,29 +339,20 @@ public class GameManager : MonoBehaviour
         }
         
         movesMade++;
-        UpdateMovesUI(); // Arayüzdeki sayacı güncelle
-
+        UpdateMovesUI(); 
         if (movedAnything) ProcessBombTimers();
-        
         CheckGameState();
     }
 
     bool IsEdgeBlocked(HexCoord from, HexCoord to)
     {
         foreach (var edge in oneWayEdges)
-        {
             if ((edge.from == from && edge.to == to) || (edge.from == to && edge.to == from))
                 if (!(from == edge.from && to == edge.to)) return true;
-        }
         return false;
     }
 
-    void HandleColumnDestroyed(HexCoord coord)
-    {
-        columns.Remove(coord);
-        dynamicWalls.Add(coord);
-        SpawnTile(coord, wallPrefab);
-    }
+    void HandleColumnDestroyed(HexCoord coord) { columns.Remove(coord); dynamicWalls.Add(coord); SpawnTile(coord, wallPrefab); }
 
     void ProcessBombTimers()
     {
@@ -348,30 +360,22 @@ public class GameManager : MonoBehaviour
         {
             if (!stone.isDead && stone.bombTimer > 0)
             {
-                stone.bombTimer--;
-                stone.UpdateVisualModifiers();
-                
+                stone.bombTimer--; stone.UpdateVisualModifiers();
                 if (stone.bombTimer == 0)
                 {
                     isGameOver = true;
                     if (losePanel != null) losePanel.SetActive(true);
-                    if (loseReasonText != null) loseReasonText.text = "BOMBA PATLADI!";
                 }
             }
         }
     }
 
-    bool Beats(char a, char b)
-    {
-        return (a == 'T' && b == 'M') || (a == 'M' && b == 'K') || (a == 'K' && b == 'T');
-    }
+    bool Beats(char a, char b) { return (a == 'T' && b == 'M') || (a == 'M' && b == 'K') || (a == 'K' && b == 'T'); }
 
     IEnumerator SlideStone(Stone stone, Vector2 targetLocalPos)
     {
-        float elapsed = 0f;
-        float duration = 0.15f;
+        float elapsed = 0f; float duration = 0.15f;
         Vector2 startPos = stone.transform.localPosition;
-
         while (elapsed < duration)
         {
             stone.transform.localPosition = Vector2.Lerp(startPos, targetLocalPos, elapsed / duration);
@@ -381,9 +385,20 @@ public class GameManager : MonoBehaviour
         stone.transform.localPosition = targetLocalPos;
     }
     
+    // YENİ: İlerlemeyi kaydeden metot
+    void SaveProgress()
+    {
+        if (currentLevelId >= unlockedLevel)
+        {
+            unlockedLevel = currentLevelId + 1;
+            PlayerPrefs.SetInt("UnlockedLevel", unlockedLevel);
+            PlayerPrefs.Save();
+        }
+    }
+
     public void CheckGameState()
     {
-        if (isGameOver) return; // Bomba patladıysa aşağıdaki hamle kontrollerini yapma
+        if (isGameOver) return; 
 
         var aliveStones = activeStones.Where(s => !s.isDead).ToList();
         
@@ -394,16 +409,17 @@ public class GameManager : MonoBehaviour
             {
                 if (aliveStones[0].q == targetThrone.q && aliveStones[0].r == targetThrone.r)
                 {
+                    SaveProgress(); // Bölüm geçildi, kaydet!
                     if (winPanel != null) winPanel.SetActive(true);
                 }
                 else
                 {
                     if (losePanel != null) losePanel.SetActive(true);
-                    if (loseReasonText != null) loseReasonText.text = "Hedef tahta ulaşamadın!";
                 }
             }
             else
             {
+                SaveProgress(); // Bölüm geçildi, kaydet!
                 if (winPanel != null) winPanel.SetActive(true);
             }
             return;
@@ -413,7 +429,6 @@ public class GameManager : MonoBehaviour
         {
             isGameOver = true;
             if (losePanel != null) losePanel.SetActive(true);
-            if (loseReasonText != null) loseReasonText.text = "Hamle sınırını aştın!";
         }
     }
 }
