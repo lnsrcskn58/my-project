@@ -1,0 +1,22 @@
+{
+  "levels": [
+    {
+      "id": 1,
+      "data": {
+        "maxMoves": 1,
+        "stones": [{"q": -1, "r": 0, "type": "T"}, {"q": 0, "r": 0, "type": "M"}, {"q": 1, "r": 0, "type": "K"}],
+        "walls": [],
+        "sticky": [],
+        "column": [],
+        "oneWayEdges": []
+      }
+    },
+    {
+      "id": 2,
+      "data": {
+        "maxMoves": 2,
+        "stones": [{"q": -3, "r": 0, "type": "K"}, {"q": 0, "r": 0, "type": "M"}, {"q": 3, "r": 0, "type": "K"}]
+      }
+    }
+  ]
+}

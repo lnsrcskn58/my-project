@@ -16,6 +16,24 @@ public struct OneWayEdge
     }
 }
 
+[System.Serializable]
+public struct StoneSnapshot
+{
+    public int q, r;
+    public char type;
+    public bool isHeavy;
+    public int bombTimer;
+    public bool isDead;
+}
+
+public class GameStateSnapshot
+{
+    public int movesMade;
+    public List<StoneSnapshot> stones;
+    public List<HexCoord> columns;
+    public List<HexCoord> dynamicWalls;
+}
+
 public class GameManager : MonoBehaviour
 {
     public static GameManager Instance;
@@ -26,17 +44,27 @@ public class GameManager : MonoBehaviour
     public GameObject wallPrefab;
     public GameObject stickyPrefab;
     public GameObject columnPrefab;
-    public GameObject oneWayPrefab; // TEK YÖNLÜ DUVAR PREFABİ
+    public GameObject oneWayPrefab;
     
     [Header("Oyun Durumu")]
+    public int currentLevelId = 1;
     public List<Stone> activeStones = new List<Stone>();
+    private List<GameObject> spawnedVisuals = new List<GameObject>();
+    
+    private Stack<GameStateSnapshot> undoStack = new Stack<GameStateSnapshot>();
+
+    [Header("Oyun Kuralları")]
+    public int maxMoves = 5;
+    public int movesMade = 0;
+    public bool hasThrone = false;
+    public HexCoord targetThrone;
 
     [Header("Bölüm Özellikleri (Zeminler)")]
     public List<HexCoord> walls = new List<HexCoord>();
     public List<HexCoord> stickyTiles = new List<HexCoord>();
     public List<HexCoord> columns = new List<HexCoord>();
     public List<HexCoord> dynamicWalls = new List<HexCoord>();
-    public List<OneWayEdge> oneWayEdges = new List<OneWayEdge>(); // TEK YÖNLÜ DUVAR LİSTESİ
+    public List<OneWayEdge> oneWayEdges = new List<OneWayEdge>();
 
     void Awake()
     {
@@ -45,26 +73,97 @@ public class GameManager : MonoBehaviour
 
     void Start()
     {
-        // Test Zeminleri
-        stickyTiles.Add(new HexCoord(0, 1)); 
-        walls.Add(new HexCoord(1, -1));      
-        columns.Add(new HexCoord(-1, 0));    
-        
-        // Tek Yönlü Duvar Testi (0,0'dan 0,-1'e geçiş serbest, geri dönüş yasak)
-        oneWayEdges.Add(new OneWayEdge(new HexCoord(0, 0), new HexCoord(0, -1)));
-
-        SpawnVisuals();
-        SpawnTestStones();
+        LoadLevel(currentLevelId);
     }
 
-    void SpawnVisuals()
+    void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.U))
+        {
+            UndoMove();
+        }
+    }
+
+    public void LoadLevel(int levelId)
+    {
+        ClearBoard();
+
+        TextAsset jsonText = Resources.Load<TextAsset>("levels");
+        if (jsonText == null)
+        {
+            Debug.LogError("levels.json dosyası Resources klasöründe bulunamadı!");
+            return;
+        }
+
+        LevelList allLevels = JsonUtility.FromJson<LevelList>(jsonText.text);
+        LevelItem levelToLoad = allLevels.levels.FirstOrDefault(l => l.id == levelId);
+        
+        if (levelToLoad == null)
+        {
+            Debug.LogError($"Bölüm {levelId} bulunamadı!");
+            return;
+        }
+
+        LevelDetails data = levelToLoad.data;
+
+        maxMoves = data.maxMoves;
+        movesMade = 0;
+        hasThrone = false; 
+
+        if (data.walls != null)
+            foreach (var w in data.walls) walls.Add(new HexCoord(w.q, w.r));
+            
+        if (data.sticky != null)
+            foreach (var s in data.sticky) stickyTiles.Add(new HexCoord(s.q, s.r));
+            
+        if (data.column != null)
+            foreach (var c in data.column) columns.Add(new HexCoord(c.q, c.r));
+
+        if (data.oneWayEdges != null)
+        {
+            foreach (var edge in data.oneWayEdges)
+            {
+                oneWayEdges.Add(new OneWayEdge(new HexCoord(edge.q1, edge.r1), new HexCoord(edge.q2, edge.r2)));
+            }
+        }
+
+        DrawBoardVisuals();
+
+        if (data.stones != null)
+        {
+            foreach (var s in data.stones)
+            {
+                SpawnStone(s.q, s.r, s.type[0], s.heavy, s.bomb);
+            }
+        }
+
+        Debug.Log($"Bölüm {levelId} yüklendi!");
+    }
+
+    void DrawBoardVisuals()
     {
         foreach (var w in walls) SpawnTile(w, wallPrefab);
+        foreach (var dw in dynamicWalls) SpawnTile(dw, wallPrefab); 
         foreach (var s in stickyTiles) SpawnTile(s, stickyPrefab);
         foreach (var c in columns) SpawnTile(c, columnPrefab);
-        
-        // Tek Yönlü Duvarları Çizdir
         foreach (var edge in oneWayEdges) SpawnOneWayVisual(edge);
+    }
+
+    public void ClearBoard()
+    {
+        foreach (var stone in activeStones) Destroy(stone.gameObject);
+        activeStones.Clear();
+
+        foreach (var visual in spawnedVisuals) Destroy(visual);
+        spawnedVisuals.Clear();
+
+        walls.Clear();
+        stickyTiles.Clear();
+        columns.Clear();
+        dynamicWalls.Clear();
+        oneWayEdges.Clear();
+        
+        undoStack.Clear(); 
     }
 
     void SpawnTile(HexCoord coord, GameObject prefab)
@@ -74,7 +173,9 @@ public class GameManager : MonoBehaviour
         
         GameObject tile = Instantiate(prefab, gridManager.transform);
         tile.transform.localPosition = localPos;
-        tile.transform.localRotation = Quaternion.Euler(0, 0, 30f); 
+        tile.transform.localRotation = Quaternion.Euler(0, 0, 30f);
+        
+        spawnedVisuals.Add(tile);
     }
 
     void SpawnOneWayVisual(OneWayEdge edge)
@@ -83,27 +184,14 @@ public class GameManager : MonoBehaviour
 
         Vector2 p1 = gridManager.GetPixelCoords(edge.from.q, edge.from.r);
         Vector2 p2 = gridManager.GetPixelCoords(edge.to.q, edge.to.r);
-        
-        // Duvarı iki altıgenin tam ortasına yerleştir
         Vector2 midPoint = (p1 + p2) / 2f;
-        
-        // Okun yönünü hesapla
         float angle = Mathf.Atan2(p2.y - p1.y, p2.x - p1.x) * Mathf.Rad2Deg;
-
-        // ÇÖZÜM: Görselin yan durmasını düzeltmek için açıya müdahale ediyoruz.
-        // Eğer hala ters veya yan duruyorsa bu değeri +90f, -90f veya 180f yaparak tam oturtabilirsin.
-        float angleOffset = -90f; 
 
         GameObject arrow = Instantiate(oneWayPrefab, gridManager.transform);
         arrow.transform.localPosition = midPoint;
-        arrow.transform.localRotation = Quaternion.Euler(0, 0, angle + angleOffset);
-    }
-
-    void SpawnTestStones()
-    {
-        SpawnStone(0, 0, 'T', false, 3);
-        SpawnStone(1, -2, 'K', true, -1);
-        SpawnStone(-2, 1, 'M', false, -1);
+        arrow.transform.localRotation = Quaternion.Euler(0, 0, angle - 90f);
+        
+        spawnedVisuals.Add(arrow);
     }
 
     void SpawnStone(int q, int r, char type, bool isHeavy, int bombTimer)
@@ -117,15 +205,74 @@ public class GameManager : MonoBehaviour
         activeStones.Add(stone);
     }
 
+    public void SaveState()
+    {
+        GameStateSnapshot snap = new GameStateSnapshot();
+        snap.movesMade = movesMade;
+        snap.columns = new List<HexCoord>(columns);
+        snap.dynamicWalls = new List<HexCoord>(dynamicWalls);
+        
+        snap.stones = new List<StoneSnapshot>();
+        foreach (var s in activeStones)
+        {
+            snap.stones.Add(new StoneSnapshot {
+                q = s.q, r = s.r, type = s.type, isHeavy = s.isHeavy, bombTimer = s.bombTimer, isDead = s.isDead
+            });
+        }
+        
+        undoStack.Push(snap);
+    }
+
+    // --- UI BUTONLARI İÇİN FONKSİYONLAR BURADA ---
+
+    public void UndoMove()
+    {
+        if (undoStack.Count == 0) return;
+
+        GameStateSnapshot snap = undoStack.Pop();
+
+        foreach (var stone in activeStones) Destroy(stone.gameObject);
+        activeStones.Clear();
+        foreach (var visual in spawnedVisuals) Destroy(visual);
+        spawnedVisuals.Clear();
+
+        movesMade = snap.movesMade;
+        columns = new List<HexCoord>(snap.columns);
+        dynamicWalls = new List<HexCoord>(snap.dynamicWalls);
+
+        DrawBoardVisuals();
+        foreach (var sSnap in snap.stones)
+        {
+            if (!sSnap.isDead) 
+            {
+                SpawnStone(sSnap.q, sSnap.r, sSnap.type, sSnap.isHeavy, sSnap.bombTimer);
+            }
+        }
+    }
+
+    public void RestartLevel()
+    {
+        LoadLevel(currentLevelId);
+    }
+
+    public void NextLevel()
+    {
+        currentLevelId++;
+        LoadLevel(currentLevelId);
+    }
+
+    // ----------------------------------------------
+
     public void ProcessMove(int dq, int dr)
     {
+        SaveState(); 
+
         bool movedAnything = false;
         activeStones.Sort((a, b) => (b.q * dq + b.r * dr).CompareTo(a.q * dq + a.r * dr));
 
         foreach (Stone stone in activeStones)
         {
             if (stone.isDead) continue;
-
             int currentQ = stone.q;
             int currentR = stone.r;
 
@@ -136,13 +283,8 @@ public class GameManager : MonoBehaviour
                 HexCoord currentCoord = new HexCoord(currentQ, currentR);
                 HexCoord nextCoord = new HexCoord(nextQ, nextR);
 
-                // 1. Izgara sınırı
                 if (Mathf.Max(Mathf.Abs(nextQ), Mathf.Abs(nextR), Mathf.Abs(-nextQ - nextR)) > gridManager.gridRadius) break;
-                
-                // 2. Normal Duvarlar
                 if (walls.Contains(nextCoord) || dynamicWalls.Contains(nextCoord)) break;
-
-                // 3. TEK YÖNLÜ DUVAR KONTROLÜ
                 if (IsEdgeBlocked(currentCoord, nextCoord)) break;
 
                 bool isSticky = stickyTiles.Contains(nextCoord);
@@ -163,10 +305,7 @@ public class GameManager : MonoBehaviour
                         if (isColumn) HandleColumnDestroyed(nextCoord);
                         if (isSticky || stone.isHeavy) break;
                     }
-                    else
-                    {
-                        break; 
-                    }
+                    else break; 
                 }
                 else
                 {
@@ -187,23 +326,21 @@ public class GameManager : MonoBehaviour
                 StartCoroutine(SlideStone(stone, targetLocalPos));
             }
         }
+        
+        movesMade++;
 
         if (movedAnything) ProcessBombTimers();
+        
+        CheckGameState();
     }
 
-    // Tek yönlü duvarın geçişi engelleyip engellemediğini test eder
     bool IsEdgeBlocked(HexCoord from, HexCoord to)
     {
         foreach (var edge in oneWayEdges)
         {
-            // Eğer iki hücre arasında bir kenar bağlantısı (duvar) varsa
             if ((edge.from == from && edge.to == to) || (edge.from == to && edge.to == from))
             {
-                // Eğer hareketimiz "izin verilen yönde (edge.from -> edge.to)" DEĞİLSE, blokla.
-                if (!(from == edge.from && to == edge.to))
-                {
-                    return true;
-                }
+                if (!(from == edge.from && to == edge.to)) return true;
             }
         }
         return false;
@@ -213,6 +350,7 @@ public class GameManager : MonoBehaviour
     {
         columns.Remove(coord);
         dynamicWalls.Add(coord);
+        SpawnTile(coord, wallPrefab);
     }
 
     void ProcessBombTimers()
@@ -246,5 +384,35 @@ public class GameManager : MonoBehaviour
             yield return null;
         }
         stone.transform.localPosition = targetLocalPos;
+    }
+    
+    public void CheckGameState()
+    {
+        var aliveStones = activeStones.Where(s => !s.isDead).ToList();
+        
+        if (aliveStones.Count == 1)
+        {
+            if (hasThrone)
+            {
+                if (aliveStones[0].q == targetThrone.q && aliveStones[0].r == targetThrone.r)
+                {
+                    Debug.Log("🎉 KAZANDIN! Hedef Tahta ulaşıldı.");
+                }
+                else
+                {
+                    Debug.Log("❌ KAYBETTİN! Son taş tahtta değil.");
+                }
+            }
+            else
+            {
+                Debug.Log("🎉 KAZANDIN! Bölüm temizlendi.");
+            }
+            return;
+        }
+
+        if (movesMade >= maxMoves)
+        {
+            Debug.Log("💀 KAYBETTİN! Hamle sınırını aştın.");
+        }
     }
 }
