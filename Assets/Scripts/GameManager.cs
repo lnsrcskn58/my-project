@@ -43,24 +43,30 @@ public class GameManager : MonoBehaviour
     public GameObject oneWayPrefab;
     
     [Header("UI (Arayüz) Referansları")]
-    public GameObject mainMenuPanel;    // YENİ: Ana Menü
-    public GameObject levelSelectPanel; // YENİ: Bölüm Seçim Ekranı
-    public GameObject gameUIPanel;      // YENİ: Oyun İçi HUD (TopBar)
+    public GameObject mainMenuPanel;    
+    public GameObject levelSelectPanel; 
+    public GameObject gameUIPanel;      
     public TextMeshProUGUI levelText;
     public TextMeshProUGUI movesText;
     public GameObject winPanel;
     public GameObject losePanel;
+
+    [Header("Dinamik Bölüm Seçimi")]
+    public GameObject levelButtonPrefab;   // YENİ: Otomatik üretilecek buton şablonu
+    public Transform levelButtonContainer; // YENİ: Butonların dizileceği kutu
+    private List<LevelItem> allLevelItems; // JSON'daki tüm bölümlerin listesi
     
     [Header("Oyun Durumu & Kayıt Sistemi")]
     public int currentLevelId = 1;
-    public int unlockedLevel = 1;       // YENİ: Kilidi açılmış en son bölüm
+    public int unlockedLevel = 1;       
     public bool isGameOver = false; 
     public List<Stone> activeStones = new List<Stone>();
     private List<GameObject> spawnedVisuals = new List<GameObject>();
     private Stack<GameStateSnapshot> undoStack = new Stack<GameStateSnapshot>();
 
-    [Header("Oyun Kuralları")]
-    public int maxMoves = 5;
+    [Header("Oyun Kuralları & Yıldız Sistemi")]
+    public int targetMoves = 5; // 3 yıldız almak için gereken hamle sayısı
+    public int hardLimitMoves = 7; // Oyunun kaybedileceği asıl sınır
     public int movesMade = 0;
     public bool hasThrone = false;
     public HexCoord targetThrone;
@@ -79,23 +85,67 @@ public class GameManager : MonoBehaviour
 
     void Start()
     {
-        // Kayıtlı ilerlemeyi yükle (Kayıt yoksa 1. bölümden başlar)
         unlockedLevel = PlayerPrefs.GetInt("UnlockedLevel", 1);
         
-        // Oyun ilk açıldığında Ana Menüyü göster
+        // JSON'u bir kez oku ve hafızada tut
+        TextAsset jsonText = Resources.Load<TextAsset>("levels");
+        if (jsonText != null)
+        {
+            LevelList allLevels = JsonUtility.FromJson<LevelList>(jsonText.text);
+            allLevelItems = allLevels.levels;
+        }
+
+        GenerateLevelButtons(); // Butonları otomatik oluştur
         ShowMainMenu();
     }
 
     void Update()
     {
-        // Oyun bitmediyse ve ana menüde değilsek geri al tuşu çalışsın
-        if (!isGameOver && !mainMenuPanel.activeSelf && Input.GetKeyDown(KeyCode.U))
-        {
-            UndoMove();
-        }
+        if (!isGameOver && !mainMenuPanel.activeSelf && Input.GetKeyDown(KeyCode.U)) UndoMove();
     }
 
-    // --- MENÜ SİSTEMİ FONKSİYONLARI ---
+    // --- MENÜ VE DİNAMİK BUTON SİSTEMİ ---
+
+    public void GenerateLevelButtons()
+    {
+        if (allLevelItems == null || levelButtonPrefab == null || levelButtonContainer == null) return;
+
+        // Önce konteyner içindeki eski butonları temizle (tekrar güncellendiğinde üst üste binmesin)
+        foreach (Transform child in levelButtonContainer) Destroy(child.gameObject);
+
+        foreach (var level in allLevelItems)
+        {
+            int lvlId = level.id;
+            GameObject btnObj = Instantiate(levelButtonPrefab, levelButtonContainer);
+            
+            // Prefab içindeki 0. Text seviye numarasını, 1. Text yıldızları tutacak
+            TextMeshProUGUI[] texts = btnObj.GetComponentsInChildren<TextMeshProUGUI>();
+            if (texts.Length > 0) texts[0].text = lvlId.ToString();
+            
+            // Yıldızları PlayerPrefs'ten çek ve emojilerle göster
+            int stars = PlayerPrefs.GetInt("LevelStars_" + lvlId, 0);
+            if (texts.Length > 1) 
+            {
+                if (lvlId > unlockedLevel) texts[1].text = "🔒"; // Kilitli
+                else if (stars == 3) texts[1].text = "⭐⭐⭐";
+                else if (stars == 2) texts[1].text = "⭐⭐";
+                else if (stars == 1) texts[1].text = "⭐";
+                else texts[1].text = "Oynanmadı";
+            }
+
+            UnityEngine.UI.Button btn = btnObj.GetComponent<UnityEngine.UI.Button>();
+            if (lvlId > unlockedLevel) 
+            {
+                btn.interactable = false; // Kilitliyse tıklanamaz olsun
+            }
+            else
+            {
+                btn.interactable = true;
+                // Lambda Expression ile butona kendi ID'sini aktarıyoruz
+                btn.onClick.AddListener(() => LoadSpecificLevel(lvlId)); 
+            }
+        }
+    }
 
     public void ShowMainMenu()
     {
@@ -109,25 +159,16 @@ public class GameManager : MonoBehaviour
 
     public void ShowLevelSelect()
     {
+        GenerateLevelButtons(); // Girmeden önce listeyi güncelle (Kazanılan yıldızlar görünsün)
         if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
         if (levelSelectPanel != null) levelSelectPanel.SetActive(true);
     }
 
-    public void StartGameFromMenu()
-    {
-        // En son kilidi açılan (kaldığı) bölümden başlat
-        LoadSpecificLevel(unlockedLevel);
-    }
+    public void StartGameFromMenu() { LoadSpecificLevel(unlockedLevel); }
 
     public void LoadSpecificLevel(int levelId)
     {
-        // Kilitli bir bölüme girmeye çalışırsa engelle
-        if (levelId > unlockedLevel) 
-        {
-            Debug.Log("Bu bölüm henüz kilitli!");
-            return; 
-        }
-        
+        if (levelId > unlockedLevel) return; 
         currentLevelId = levelId;
         
         if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
@@ -143,18 +184,17 @@ public class GameManager : MonoBehaviour
     {
         ClearBoard();
 
-        TextAsset jsonText = Resources.Load<TextAsset>("levels");
-        if (jsonText == null) return;
-
-        LevelList allLevels = JsonUtility.FromJson<LevelList>(jsonText.text);
-        LevelItem levelToLoad = allLevels.levels.FirstOrDefault(l => l.id == levelId);
-        
+        if (allLevelItems == null) return;
+        LevelItem levelToLoad = allLevelItems.FirstOrDefault(l => l.id == levelId);
         if (levelToLoad == null) return;
 
         LevelDetails data = levelToLoad.data;
 
-        maxMoves = data.maxMoves;
+        // YILDIZ KURALLARI GÜNCELLEMESİ
+        targetMoves = data.maxMoves; // 3 yıldız hedefi
+        hardLimitMoves = targetMoves + 2; // Oyunu kaybetme sınırı
         movesMade = 0;
+        
         hasThrone = false; 
         isGameOver = false; 
 
@@ -182,8 +222,9 @@ public class GameManager : MonoBehaviour
     {
         if (movesText != null)
         {
-            movesText.text = $"Hamle: {movesMade} / {maxMoves}";
-            movesText.color = (maxMoves - movesMade <= 1) ? Color.red : Color.white;
+            // Ekranda kalan hakkı "Hamle: Yaptığın / Maksimum Sınır" şeklinde gösterelim
+            movesText.text = $"Hamle: {movesMade} / {hardLimitMoves}";
+            movesText.color = (hardLimitMoves - movesMade <= 1) ? Color.red : Color.white;
         }
     }
 
@@ -282,14 +323,17 @@ public class GameManager : MonoBehaviour
     }
 
     public void RestartLevel() { LoadLevel(currentLevelId); }
+    
+    // YENİ: Sonraki bölüme geçerken UI'ı resetliyoruz
     public void NextLevel() { currentLevelId++; LoadLevel(currentLevelId); }
 
     public void ProcessMove(int dq, int dr)
     {
         if (isGameOver) return; 
 
-        SaveState(); 
-        bool movedAnything = false;
+        SaveState(); // O anki durumu hafızaya alıyoruz
+        bool movedAnything = false; // Hareket kontrolcüsü
+        
         activeStones.Sort((a, b) => (b.q * dq + b.r * dr).CompareTo(a.q * dq + a.r * dr));
 
         foreach (Stone stone in activeStones)
@@ -316,7 +360,7 @@ public class GameManager : MonoBehaviour
                     if (Beats(stone.type, targetStone.type))
                     {
                         targetStone.isDead = true; targetStone.gameObject.SetActive(false);
-                        currentQ = nextQ; currentR = nextR; movedAnything = true;
+                        currentQ = nextQ; currentR = nextR; 
                         if (isColumn) HandleColumnDestroyed(nextCoord);
                         if (isSticky || stone.isHeavy) break;
                     }
@@ -324,24 +368,37 @@ public class GameManager : MonoBehaviour
                 }
                 else
                 {
-                    currentQ = nextQ; currentR = nextR; movedAnything = true;
+                    currentQ = nextQ; currentR = nextR; 
                     if (isColumn) HandleColumnDestroyed(nextCoord);
                     if (isSticky || stone.isHeavy) break;
                 }
             }
 
+            // EĞER TAŞIN YERİ DEĞİŞTİYSE GERÇEKTEN HAREKET ETMİŞTİR
             if (currentQ != stone.q || currentR != stone.r)
             {
                 stone.q = currentQ; stone.r = currentR;
                 Vector2 targetLocalPos = gridManager.GetPixelCoords(stone.q, stone.r);
                 StartCoroutine(SlideStone(stone, targetLocalPos));
+                movedAnything = true; // En az 1 taş hareket etti!
             }
         }
         
-        movesMade++;
-        UpdateMovesUI(); 
-        if (movedAnything) ProcessBombTimers();
-        CheckGameState();
+        // --- ASIL DÜZELTME BURADA ---
+        if (movedAnything)
+        {
+            // Sadece bir hareket olduysa hamle say, bombaları düşür ve durumu kontrol et
+            movesMade++;
+            UpdateMovesUI(); 
+            ProcessBombTimers();
+            CheckGameState();
+        }
+        else
+        {
+            // Eğer hiçbir taş kımıldamadıysa, "boşuna" kaydettiğimiz durumu hafızadan geri siliyoruz.
+            // Böylece Geri Al tuşu bozulmamış oluyor.
+            if (undoStack.Count > 0) undoStack.Pop();
+        }
     }
 
     bool IsEdgeBlocked(HexCoord from, HexCoord to)
@@ -384,16 +441,49 @@ public class GameManager : MonoBehaviour
         }
         stone.transform.localPosition = targetLocalPos;
     }
-    
-    // YENİ: İlerlemeyi kaydeden metot
-    void SaveProgress()
+
+    // --- OYUN KAZANMA VE YILDIZ HESAPLAMA SİSTEMİ ---
+    void LevelCompleted()
     {
+        isGameOver = true;
+        
+        // Yıldız Hesaplama (İstediğin kurala göre)
+        int earnedStars = 0;
+        if (movesMade <= targetMoves) earnedStars = 3;
+        else if (movesMade == targetMoves + 1) earnedStars = 2;
+        else if (movesMade >= targetMoves + 2) earnedStars = 1;
+
+        // Verileri Kaydet
+        SaveProgress(earnedStars);
+
+        // Paneli Aç
+        if (winPanel != null) 
+        {
+            winPanel.SetActive(true);
+            
+            // İstersen WinPanel içine bir Text daha açıp yıldızları yazdırabilirsin:
+            // "⭐" "⭐⭐" vb. Bu kısmı UI tasarlarsan kodda ekleyebiliriz.
+        }
+    }
+
+    void SaveProgress(int starsEarned)
+    {
+        // En yüksek yıldızı kaydet
+        int currentRecord = PlayerPrefs.GetInt("LevelStars_" + currentLevelId, 0);
+        if (starsEarned > currentRecord)
+        {
+            PlayerPrefs.SetInt("LevelStars_" + currentLevelId, starsEarned);
+        }
+
+        // Kilit açma
         if (currentLevelId >= unlockedLevel)
         {
             unlockedLevel = currentLevelId + 1;
             PlayerPrefs.SetInt("UnlockedLevel", unlockedLevel);
-            PlayerPrefs.Save();
         }
+        
+        PlayerPrefs.Save();
+        GenerateLevelButtons(); // Arkaplanda buton listesini güncelle
     }
 
     public void CheckGameState()
@@ -404,28 +494,17 @@ public class GameManager : MonoBehaviour
         
         if (aliveStones.Count == 1)
         {
-            isGameOver = true;
             if (hasThrone)
             {
-                if (aliveStones[0].q == targetThrone.q && aliveStones[0].r == targetThrone.r)
-                {
-                    SaveProgress(); // Bölüm geçildi, kaydet!
-                    if (winPanel != null) winPanel.SetActive(true);
-                }
-                else
-                {
-                    if (losePanel != null) losePanel.SetActive(true);
-                }
+                if (aliveStones[0].q == targetThrone.q && aliveStones[0].r == targetThrone.r) LevelCompleted();
+                else if (losePanel != null) { isGameOver = true; losePanel.SetActive(true); }
             }
-            else
-            {
-                SaveProgress(); // Bölüm geçildi, kaydet!
-                if (winPanel != null) winPanel.SetActive(true);
-            }
+            else LevelCompleted();
             return;
         }
 
-        if (movesMade >= maxMoves)
+        // Kaybetme Sınırı Kontrolü (Hard Limit)
+        if (movesMade >= hardLimitMoves)
         {
             isGameOver = true;
             if (losePanel != null) losePanel.SetActive(true);
