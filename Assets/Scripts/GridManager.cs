@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public class GridManager : MonoBehaviour
@@ -10,11 +11,12 @@ public class GridManager : MonoBehaviour
     [Header("Prefabler")]
     public GameObject hexBackgroundPrefab;
 
+    // Arka plan zeminlerini hafızada tutuyoruz ki daralınca eskileri silebilelim
+    private List<GameObject> backgroundHexes = new List<GameObject>();
+
     void Start()
     {
-        DrawGrid();
-        
-        // DÜZELTME 1: CSS'deki saat yönü rotasyonunu Unity'de elde etmek için eksi (-) kullanıyoruz.
+        // Rotasyonu ayarlıyoruz ama çizim işini artık GameManager'a bırakıyoruz
         transform.rotation = Quaternion.Euler(0, 0, -30f);
     }
 
@@ -25,23 +27,31 @@ public class GridManager : MonoBehaviour
         return new Vector2(x, y);
     }
 
-    void DrawGrid()
+    // YENİ: Dışarıdan çağrıldığında mevcut zeminleri silip istenen çapa göre yeniden çizen fonksiyon
+    public void RedrawGrid(int radius)
     {
-        for (int q = -gridRadius; q <= gridRadius; q++)
+        // Önceki zeminleri temizle
+        foreach (var hex in backgroundHexes)
         {
-            for (int r = -gridRadius; r <= gridRadius; r++)
+            Destroy(hex);
+        }
+        backgroundHexes.Clear();
+
+        // Yeni çapa göre zeminleri diz
+        for (int q = -radius; q <= radius; q++)
+        {
+            for (int r = -radius; r <= radius; r++)
             {
-                if (Mathf.Max(Mathf.Abs(q), Mathf.Abs(r), Mathf.Abs(-q - r)) <= gridRadius)
+                if (Mathf.Max(Mathf.Abs(q), Mathf.Abs(r), Mathf.Abs(-q - r)) <= radius)
                 {
                     Vector2 localPos = GetPixelCoords(q, r);
                     
-                    // Altıgenleri oluştururken GridManager'ın içine atıyoruz
                     GameObject hex = Instantiate(hexBackgroundPrefab, this.transform);
-                    hex.transform.localPosition = localPos; // World position değil, Local position!
-                    
-                    // DÜZELTME 2: Grid -30 dönünce görsellerin dik durması için +30 veriyoruz
+                    hex.transform.localPosition = localPos; 
                     hex.transform.localRotation = Quaternion.Euler(0, 0, 30f); 
                     hex.name = $"Hex_{q}_{r}";
+                    
+                    backgroundHexes.Add(hex);
                 }
             }
         }

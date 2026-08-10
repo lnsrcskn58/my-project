@@ -2,7 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using TMPro; 
+using TMPro;
 
 [System.Serializable]
 public struct OneWayEdge
@@ -28,6 +28,7 @@ public class GameStateSnapshot
     public List<StoneSnapshot> stones;
     public List<HexCoord> columns;
     public List<HexCoord> dynamicWalls;
+    public int score;
 }
 
 public class GameManager : MonoBehaviour
@@ -41,32 +42,44 @@ public class GameManager : MonoBehaviour
     public GameObject stickyPrefab;
     public GameObject columnPrefab;
     public GameObject oneWayPrefab;
-    
-    [Header("UI (Arayüz) Referansları")]
-    public GameObject mainMenuPanel;    
-    public GameObject levelSelectPanel; 
-    public GameObject gameUIPanel;      
-    public TextMeshProUGUI levelText;
-    public TextMeshProUGUI movesText;
+
+    [Header("Genel Menü Referansları")]
+    public GameObject mainMenuPanel;
+    public GameObject levelSelectPanel;
     public GameObject winPanel;
     public GameObject losePanel;
+    public TextMeshProUGUI loseReasonText;
+
+    [Header("Level Modu UI Referansları")]
+    public GameObject levelModeUIPanel;
+    public TextMeshProUGUI levelText;
+    public TextMeshProUGUI levelMovesText;
+
+    [Header("Sonsuz Mod UI Referansları")]
+    public GameObject endlessModeUIPanel;
+    public TextMeshProUGUI endlessRoundText;
+    public TextMeshProUGUI endlessMovesText;
+    public TextMeshProUGUI scoreText;
+    public TextMeshProUGUI timerText;
+    public TextMeshProUGUI comboText;
 
     [Header("Dinamik Bölüm Seçimi")]
-    public GameObject levelButtonPrefab;   // YENİ: Otomatik üretilecek buton şablonu
-    public Transform levelButtonContainer; // YENİ: Butonların dizileceği kutu
-    private List<LevelItem> allLevelItems; // JSON'daki tüm bölümlerin listesi
-    
+    public GameObject levelButtonPrefab;
+    public Transform levelButtonContainer;
+    private List<LevelItem> allLevelItems;
+
     [Header("Oyun Durumu & Kayıt Sistemi")]
     public int currentLevelId = 1;
-    public int unlockedLevel = 1;       
-    public bool isGameOver = false; 
+    public int unlockedLevel = 1;
+    public bool isGameOver = false;
+    public int currentPlayRadius; // Modlara göre dinamik değişen oyun alanı çapı
     public List<Stone> activeStones = new List<Stone>();
     private List<GameObject> spawnedVisuals = new List<GameObject>();
     private Stack<GameStateSnapshot> undoStack = new Stack<GameStateSnapshot>();
 
     [Header("Oyun Kuralları & Yıldız Sistemi")]
-    public int targetMoves = 5; // 3 yıldız almak için gereken hamle sayısı
-    public int hardLimitMoves = 7; // Oyunun kaybedileceği asıl sınır
+    public int targetMoves = 5;
+    public int hardLimitMoves = 7;
     public int movesMade = 0;
     public bool hasThrone = false;
     public HexCoord targetThrone;
@@ -78,6 +91,15 @@ public class GameManager : MonoBehaviour
     public List<HexCoord> dynamicWalls = new List<HexCoord>();
     public List<OneWayEdge> oneWayEdges = new List<OneWayEdge>();
 
+    [Header("Sonsuz Mod Durumu")]
+    public bool isEndlessMode = false;
+    public int score = 0;
+    public int comboCount = 0;
+    public int endlessLevelCleared = 0;
+    public float timeLeft = 0f;
+    private bool isTimerRunning = false;
+    private bool isGenerating = false;
+
     void Awake()
     {
         if (Instance == null) Instance = this;
@@ -86,8 +108,7 @@ public class GameManager : MonoBehaviour
     void Start()
     {
         unlockedLevel = PlayerPrefs.GetInt("UnlockedLevel", 1);
-        
-        // JSON'u bir kez oku ve hafızada tut
+
         TextAsset jsonText = Resources.Load<TextAsset>("levels");
         if (jsonText != null)
         {
@@ -95,38 +116,47 @@ public class GameManager : MonoBehaviour
             allLevelItems = allLevels.levels;
         }
 
-        GenerateLevelButtons(); // Butonları otomatik oluştur
+        // Ana menüde arka planın düzgün görünmesi için varsayılan çapta çizdiriyoruz
+        gridManager.RedrawGrid(gridManager.gridRadius);
+
+        GenerateLevelButtons();
         ShowMainMenu();
     }
 
     void Update()
     {
         if (!isGameOver && !mainMenuPanel.activeSelf && Input.GetKeyDown(KeyCode.U)) UndoMove();
+
+        if (isEndlessMode && isTimerRunning && !isGameOver && !isGenerating)
+        {
+            timeLeft -= Time.deltaTime;
+            UpdateEndlessUI();
+
+            if (timeLeft <= 0)
+            {
+                timeLeft = 0;
+                EndlessGameOver("Süre Bitti! ⏳");
+            }
+        }
     }
 
-    // --- MENÜ VE DİNAMİK BUTON SİSTEMİ ---
-
+    // --- MENÜ SİSTEMİ ---
     public void GenerateLevelButtons()
     {
         if (allLevelItems == null || levelButtonPrefab == null || levelButtonContainer == null) return;
-
-        // Önce konteyner içindeki eski butonları temizle (tekrar güncellendiğinde üst üste binmesin)
         foreach (Transform child in levelButtonContainer) Destroy(child.gameObject);
 
         foreach (var level in allLevelItems)
         {
             int lvlId = level.id;
             GameObject btnObj = Instantiate(levelButtonPrefab, levelButtonContainer);
-            
-            // Prefab içindeki 0. Text seviye numarasını, 1. Text yıldızları tutacak
             TextMeshProUGUI[] texts = btnObj.GetComponentsInChildren<TextMeshProUGUI>();
             if (texts.Length > 0) texts[0].text = lvlId.ToString();
-            
-            // Yıldızları PlayerPrefs'ten çek ve emojilerle göster
+
             int stars = PlayerPrefs.GetInt("LevelStars_" + lvlId, 0);
-            if (texts.Length > 1) 
+            if (texts.Length > 1)
             {
-                if (lvlId > unlockedLevel) texts[1].text = "🔒"; // Kilitli
+                if (lvlId > unlockedLevel) texts[1].text = "🔒";
                 else if (stars == 3) texts[1].text = "⭐⭐⭐";
                 else if (stars == 2) texts[1].text = "⭐⭐";
                 else if (stars == 1) texts[1].text = "⭐";
@@ -134,32 +164,31 @@ public class GameManager : MonoBehaviour
             }
 
             UnityEngine.UI.Button btn = btnObj.GetComponent<UnityEngine.UI.Button>();
-            if (lvlId > unlockedLevel) 
-            {
-                btn.interactable = false; // Kilitliyse tıklanamaz olsun
-            }
-            else
-            {
-                btn.interactable = true;
-                // Lambda Expression ile butona kendi ID'sini aktarıyoruz
-                btn.onClick.AddListener(() => LoadSpecificLevel(lvlId)); 
-            }
+            if (lvlId > unlockedLevel) btn.interactable = false;
+            else btn.onClick.AddListener(() => LoadSpecificLevel(lvlId));
         }
     }
 
     public void ShowMainMenu()
     {
+        isEndlessMode = false;
+        isTimerRunning = false;
         ClearBoard();
+
+        // Varsayılan çapa dönüp çizimi sıfırla
+        gridManager.RedrawGrid(gridManager.gridRadius);
+
         if (mainMenuPanel != null) mainMenuPanel.SetActive(true);
         if (levelSelectPanel != null) levelSelectPanel.SetActive(false);
-        if (gameUIPanel != null) gameUIPanel.SetActive(false);
+        if (levelModeUIPanel != null) levelModeUIPanel.SetActive(false);
+        if (endlessModeUIPanel != null) endlessModeUIPanel.SetActive(false);
         if (winPanel != null) winPanel.SetActive(false);
         if (losePanel != null) losePanel.SetActive(false);
     }
 
     public void ShowLevelSelect()
     {
-        GenerateLevelButtons(); // Girmeden önce listeyi güncelle (Kazanılan yıldızlar görünsün)
+        GenerateLevelButtons();
         if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
         if (levelSelectPanel != null) levelSelectPanel.SetActive(true);
     }
@@ -168,18 +197,216 @@ public class GameManager : MonoBehaviour
 
     public void LoadSpecificLevel(int levelId)
     {
-        if (levelId > unlockedLevel) return; 
+        if (levelId > unlockedLevel) return;
+        isEndlessMode = false;
         currentLevelId = levelId;
         
+        // Oyun alanı çapını normal değere çek ve zeminleri yeniden çiz
+        currentPlayRadius = gridManager.gridRadius;
+        gridManager.RedrawGrid(currentPlayRadius);
+
         if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
         if (levelSelectPanel != null) levelSelectPanel.SetActive(false);
-        if (gameUIPanel != null) gameUIPanel.SetActive(true);
-        
+        if (levelModeUIPanel != null) levelModeUIPanel.SetActive(true);
+        if (endlessModeUIPanel != null) endlessModeUIPanel.SetActive(false);
+
         LoadLevel(currentLevelId);
     }
 
-    // ---------------------------------
+    // --- SONSUZ MOD SİSTEMİ ---
+    public void StartEndlessMode()
+    {
+        isEndlessMode = true;
+        score = 0;
+        comboCount = 0;
+        endlessLevelCleared = 0;
+        timeLeft = 30f;
+        isTimerRunning = true;
+        isGenerating = false;
 
+        // Oyun alanı çapını sonsuz mod için 1 azaltıp zemini yeniden çiziyoruz
+        currentPlayRadius = Mathf.Max(1, gridManager.gridRadius - 1);
+        gridManager.RedrawGrid(currentPlayRadius);
+
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (levelSelectPanel != null) levelSelectPanel.SetActive(false);
+        if (levelModeUIPanel != null) levelModeUIPanel.SetActive(false);
+        if (endlessModeUIPanel != null) endlessModeUIPanel.SetActive(true);
+        if (comboText != null) comboText.gameObject.SetActive(false);
+
+        GenerateNextEndlessRound(null);
+    }
+
+    void GenerateNextEndlessRound(StoneSnapshot? keptStone)
+    {
+        isGenerating = true;
+        ClearBoard();
+
+        bool solvable = false;
+        int minMoves = 0;
+        int attempts = 0;
+        int stoneCount = 3 + (endlessLevelCleared / 5);
+        if (stoneCount > 5) stoneCount = 5;
+
+        bool useWalls = endlessLevelCleared >= 5;
+        bool useSticky = endlessLevelCleared >= 10;
+        bool useColumn = endlessLevelCleared >= 15;
+        bool useHeavy = endlessLevelCleared >= 20;
+        bool useBomb = endlessLevelCleared >= 25;
+
+        List<StoneSnapshot> candidateStones = new List<StoneSnapshot>();
+        List<HexCoord> candidateWalls = new List<HexCoord>();
+        List<HexCoord> candidateSticky = new List<HexCoord>();
+        List<HexCoord> candidateColumn = new List<HexCoord>();
+
+        while (!solvable)
+        {
+            attempts++;
+            if (attempts > 50) { useWalls = false; useSticky = false; useColumn = false; useHeavy = false; useBomb = false; }
+
+            candidateStones.Clear();
+            candidateWalls.Clear();
+            candidateSticky.Clear();
+            candidateColumn.Clear();
+
+            List<HexCoord> emptyCells = new List<HexCoord>();
+            
+            // Daraltılmış alan (currentPlayRadius) içindeki boş hücreleri bul
+            for (int q = -currentPlayRadius; q <= currentPlayRadius; q++)
+            {
+                for (int r = -currentPlayRadius; r <= currentPlayRadius; r++)
+                {
+                    if (Mathf.Max(Mathf.Abs(q), Mathf.Abs(r), Mathf.Abs(-q - r)) <= currentPlayRadius)
+                        emptyCells.Add(new HexCoord(q, r));
+                }
+            }
+
+            if (keptStone.HasValue)
+            {
+                StoneSnapshot k = keptStone.Value;
+                k.isDead = false; k.isHeavy = false; k.bombTimer = -1;
+                candidateStones.Add(k);
+                emptyCells.RemoveAll(c => c.q == k.q && c.r == k.r);
+            }
+
+            emptyCells = emptyCells.OrderBy(x => Random.value).ToList();
+            char[] types = { 'T', 'K', 'M' };
+
+            for (int i = 0; i < stoneCount; i++)
+            {
+                HexCoord cell = emptyCells[i];
+                char type = types[Random.Range(0, types.Length)];
+                bool heavy = useHeavy && (Random.value < 0.20f);
+                int bomb = useBomb && (Random.value < 0.15f) ? Random.Range(4, 7) : -1;
+
+                candidateStones.Add(new StoneSnapshot { q = cell.q, r = cell.r, type = type, isDead = false, isHeavy = heavy, bombTimer = bomb });
+            }
+
+            int obsIndex = stoneCount;
+            if (useWalls) { int c = Random.Range(0, 3); for (int i = 0; i < c && obsIndex < emptyCells.Count; i++) candidateWalls.Add(emptyCells[obsIndex++]); }
+            if (useSticky) { int c = Random.Range(0, 2); for (int i = 0; i < c && obsIndex < emptyCells.Count; i++) candidateSticky.Add(emptyCells[obsIndex++]); }
+            if (useColumn) { int c = Random.Range(0, 2); for (int i = 0; i < c && obsIndex < emptyCells.Count; i++) candidateColumn.Add(emptyCells[obsIndex++]); }
+
+            int? calculatedMinMoves = FindMinMovesBFS(candidateStones, candidateWalls, candidateSticky, candidateColumn, new List<OneWayEdge>(), currentPlayRadius);
+            if (calculatedMinMoves.HasValue && calculatedMinMoves.Value > 0)
+            {
+                minMoves = calculatedMinMoves.Value;
+                solvable = true;
+            }
+        }
+
+        if (endlessLevelCleared > 0) timeLeft += 8f;
+
+        targetMoves = minMoves;
+        int bonus = endlessLevelCleared < 5 ? 4 : endlessLevelCleared < 15 ? 3 : endlessLevelCleared < 30 ? 2 : endlessLevelCleared < 50 ? 1 : 0;
+        hardLimitMoves = minMoves + bonus;
+        movesMade = 0;
+        hasThrone = false;
+        isGameOver = false;
+
+        walls = candidateWalls;
+        stickyTiles = candidateSticky;
+        columns = candidateColumn;
+        dynamicWalls.Clear();
+        oneWayEdges.Clear();
+
+        if (endlessRoundText != null) endlessRoundText.text = $"Sonsuz Mod - Raunt {endlessLevelCleared + 1}";
+        if (winPanel != null) winPanel.SetActive(false);
+        if (losePanel != null) losePanel.SetActive(false);
+
+        UpdateMovesUI();
+        UpdateEndlessUI();
+        DrawBoardVisuals();
+
+        foreach (var s in candidateStones) SpawnStone(s.q, s.r, s.type, s.isHeavy, s.bombTimer);
+
+        isGenerating = false;
+    }
+
+    void UpdateEndlessUI()
+    {
+        if (!isEndlessMode) return;
+        if (scoreText != null) scoreText.text = $"Skor: {score}";
+        if (timerText != null)
+        {
+            timerText.text = $"⏱️ {Mathf.CeilToInt(timeLeft)}s";
+            timerText.color = timeLeft <= 10f ? Color.red : new Color(1f, 0.6f, 0f); 
+        }
+    }
+
+    void EndlessRoundWon()
+    {
+        isGenerating = true;
+        int excessMoves = movesMade - targetMoves;
+        int roundScore = 0;
+
+        if (excessMoves <= 0)
+        {
+            comboCount++;
+            roundScore = comboCount >= 3 ? (int)(100 * comboCount * 0.5f) : 100;
+        }
+        else
+        {
+            comboCount = 0;
+            roundScore = 100 - (20 * excessMoves);
+            if (roundScore < 0) roundScore = 0;
+        }
+
+        score += roundScore;
+        endlessLevelCleared++;
+
+        if (comboText != null)
+        {
+            if (comboCount >= 3)
+            {
+                comboText.gameObject.SetActive(true);
+                comboText.text = $"🔥 {comboCount}x Kombo!";
+            }
+            else comboText.gameObject.SetActive(false);
+        }
+
+        UpdateEndlessUI();
+
+        Invoke(nameof(NextEndlessWrapper), 0.4f);
+    }
+
+    void NextEndlessWrapper()
+    {
+        StoneSnapshot kept = new StoneSnapshot();
+        var lastAlive = activeStones.FirstOrDefault(s => !s.isDead);
+        if (lastAlive != null) { kept.q = lastAlive.q; kept.r = lastAlive.r; kept.type = lastAlive.type; }
+        GenerateNextEndlessRound(lastAlive != null ? kept : (StoneSnapshot?)null);
+    }
+
+    void EndlessGameOver(string reason)
+    {
+        isGameOver = true;
+        isTimerRunning = false;
+        if (losePanel != null) losePanel.SetActive(true);
+        if (loseReasonText != null) loseReasonText.text = $"{reason}\nToplam Skor: {score}";
+    }
+
+    // --- NORMAL SEVİYE SİSTEMİ ---
     public void LoadLevel(int levelId)
     {
         ClearBoard();
@@ -190,13 +417,11 @@ public class GameManager : MonoBehaviour
 
         LevelDetails data = levelToLoad.data;
 
-        // YILDIZ KURALLARI GÜNCELLEMESİ
-        targetMoves = data.maxMoves; // 3 yıldız hedefi
-        hardLimitMoves = targetMoves + 2; // Oyunu kaybetme sınırı
+        targetMoves = data.maxMoves;
+        hardLimitMoves = targetMoves + 2;
         movesMade = 0;
-        
-        hasThrone = false; 
-        isGameOver = false; 
+        hasThrone = false;
+        isGameOver = false;
 
         if (winPanel != null) winPanel.SetActive(false);
         if (losePanel != null) losePanel.SetActive(false);
@@ -220,18 +445,28 @@ public class GameManager : MonoBehaviour
 
     void UpdateMovesUI()
     {
-        if (movesText != null)
+        if (isEndlessMode)
         {
-            // Ekranda kalan hakkı "Hamle: Yaptığın / Maksimum Sınır" şeklinde gösterelim
-            movesText.text = $"Hamle: {movesMade} / {hardLimitMoves}";
-            movesText.color = (hardLimitMoves - movesMade <= 1) ? Color.red : Color.white;
+            if (endlessMovesText != null)
+            {
+                endlessMovesText.text = $"Hamle: {movesMade} / {hardLimitMoves}";
+                endlessMovesText.color = (hardLimitMoves - movesMade <= 1) ? Color.red : Color.white;
+            }
+        }
+        else
+        {
+            if (levelMovesText != null)
+            {
+                levelMovesText.text = $"Hamle: {movesMade} / {hardLimitMoves}";
+                levelMovesText.color = (hardLimitMoves - movesMade <= 1) ? Color.red : Color.white;
+            }
         }
     }
 
     void DrawBoardVisuals()
     {
         foreach (var w in walls) SpawnTile(w, wallPrefab);
-        foreach (var dw in dynamicWalls) SpawnTile(dw, wallPrefab); 
+        foreach (var dw in dynamicWalls) SpawnTile(dw, wallPrefab);
         foreach (var s in stickyTiles) SpawnTile(s, stickyPrefab);
         foreach (var c in columns) SpawnTile(c, columnPrefab);
         foreach (var edge in oneWayEdges) SpawnOneWayVisual(edge);
@@ -245,7 +480,7 @@ public class GameManager : MonoBehaviour
         spawnedVisuals.Clear();
 
         walls.Clear(); stickyTiles.Clear(); columns.Clear(); dynamicWalls.Clear(); oneWayEdges.Clear();
-        undoStack.Clear(); 
+        undoStack.Clear();
     }
 
     void SpawnTile(HexCoord coord, GameObject prefab)
@@ -288,11 +523,13 @@ public class GameManager : MonoBehaviour
         snap.movesMade = movesMade;
         snap.columns = new List<HexCoord>(columns);
         snap.dynamicWalls = new List<HexCoord>(dynamicWalls);
-        
+        snap.score = score;
+
         snap.stones = new List<StoneSnapshot>();
         foreach (var s in activeStones)
         {
-            snap.stones.Add(new StoneSnapshot {
+            snap.stones.Add(new StoneSnapshot
+            {
                 q = s.q, r = s.r, type = s.type, isHeavy = s.isHeavy, bombTimer = s.bombTimer, isDead = s.isDead
             });
         }
@@ -301,7 +538,7 @@ public class GameManager : MonoBehaviour
 
     public void UndoMove()
     {
-        if (undoStack.Count == 0 || isGameOver) return;
+        if (undoStack.Count == 0 || isGameOver || isGenerating) return;
         GameStateSnapshot snap = undoStack.Pop();
 
         foreach (var stone in activeStones) Destroy(stone.gameObject);
@@ -312,28 +549,32 @@ public class GameManager : MonoBehaviour
         movesMade = snap.movesMade;
         columns = new List<HexCoord>(snap.columns);
         dynamicWalls = new List<HexCoord>(snap.dynamicWalls);
+        score = snap.score;
 
         DrawBoardVisuals();
         foreach (var sSnap in snap.stones)
         {
             if (!sSnap.isDead) SpawnStone(sSnap.q, sSnap.r, sSnap.type, sSnap.isHeavy, sSnap.bombTimer);
         }
-        
+
         UpdateMovesUI();
+        UpdateEndlessUI();
     }
 
-    public void RestartLevel() { LoadLevel(currentLevelId); }
-    
-    // YENİ: Sonraki bölüme geçerken UI'ı resetliyoruz
+    public void RestartLevel()
+    {
+        if (isEndlessMode) StartEndlessMode();
+        else LoadLevel(currentLevelId);
+    }
+
     public void NextLevel() { currentLevelId++; LoadLevel(currentLevelId); }
 
     public void ProcessMove(int dq, int dr)
     {
-        if (isGameOver) return; 
+        if (isGameOver || isGenerating) return;
 
-        SaveState(); // O anki durumu hafızaya alıyoruz
-        bool movedAnything = false; // Hareket kontrolcüsü
-        
+        SaveState();
+        bool movedAnything = false;
         activeStones.Sort((a, b) => (b.q * dq + b.r * dr).CompareTo(a.q * dq + a.r * dr));
 
         foreach (Stone stone in activeStones)
@@ -347,58 +588,50 @@ public class GameManager : MonoBehaviour
                 HexCoord currentCoord = new HexCoord(currentQ, currentR);
                 HexCoord nextCoord = new HexCoord(nextQ, nextR);
 
-                if (Mathf.Max(Mathf.Abs(nextQ), Mathf.Abs(nextR), Mathf.Abs(-nextQ - nextR)) > gridManager.gridRadius) break;
+                // Daraltılmış/varsayılan sınır kontrolü (currentPlayRadius)
+                if (Mathf.Max(Mathf.Abs(nextQ), Mathf.Abs(nextR), Mathf.Abs(-nextQ - nextR)) > currentPlayRadius) break;
                 if (walls.Contains(nextCoord) || dynamicWalls.Contains(nextCoord)) break;
                 if (IsEdgeBlocked(currentCoord, nextCoord)) break;
 
                 bool isSticky = stickyTiles.Contains(nextCoord);
                 bool isColumn = columns.Contains(nextCoord);
                 Stone targetStone = activeStones.FirstOrDefault(s => s.q == nextQ && s.r == nextR && !s.isDead);
-                
+
                 if (targetStone != null)
                 {
                     if (Beats(stone.type, targetStone.type))
                     {
                         targetStone.isDead = true; targetStone.gameObject.SetActive(false);
-                        currentQ = nextQ; currentR = nextR; 
+                        currentQ = nextQ; currentR = nextR; movedAnything = true;
                         if (isColumn) HandleColumnDestroyed(nextCoord);
                         if (isSticky || stone.isHeavy) break;
                     }
-                    else break; 
+                    else break;
                 }
                 else
                 {
-                    currentQ = nextQ; currentR = nextR; 
+                    currentQ = nextQ; currentR = nextR; movedAnything = true;
                     if (isColumn) HandleColumnDestroyed(nextCoord);
                     if (isSticky || stone.isHeavy) break;
                 }
             }
 
-            // EĞER TAŞIN YERİ DEĞİŞTİYSE GERÇEKTEN HAREKET ETMİŞTİR
             if (currentQ != stone.q || currentR != stone.r)
             {
                 stone.q = currentQ; stone.r = currentR;
                 Vector2 targetLocalPos = gridManager.GetPixelCoords(stone.q, stone.r);
                 StartCoroutine(SlideStone(stone, targetLocalPos));
-                movedAnything = true; // En az 1 taş hareket etti!
             }
         }
-        
-        // --- ASIL DÜZELTME BURADA ---
+
         if (movedAnything)
         {
-            // Sadece bir hareket olduysa hamle say, bombaları düşür ve durumu kontrol et
             movesMade++;
-            UpdateMovesUI(); 
+            UpdateMovesUI();
             ProcessBombTimers();
             CheckGameState();
         }
-        else
-        {
-            // Eğer hiçbir taş kımıldamadıysa, "boşuna" kaydettiğimiz durumu hafızadan geri siliyoruz.
-            // Böylece Geri Al tuşu bozulmamış oluyor.
-            if (undoStack.Count > 0) undoStack.Pop();
-        }
+        else if (undoStack.Count > 0) undoStack.Pop();
     }
 
     bool IsEdgeBlocked(HexCoord from, HexCoord to)
@@ -420,8 +653,13 @@ public class GameManager : MonoBehaviour
                 stone.bombTimer--; stone.UpdateVisualModifiers();
                 if (stone.bombTimer == 0)
                 {
-                    isGameOver = true;
-                    if (losePanel != null) losePanel.SetActive(true);
+                    if (isEndlessMode) EndlessGameOver("Bomba Patladı! 💥");
+                    else
+                    {
+                        isGameOver = true;
+                        if (losePanel != null) losePanel.SetActive(true);
+                        if (loseReasonText != null) loseReasonText.text = "BOMBA PATLADI!";
+                    }
                 }
             }
         }
@@ -442,72 +680,215 @@ public class GameManager : MonoBehaviour
         stone.transform.localPosition = targetLocalPos;
     }
 
-    // --- OYUN KAZANMA VE YILDIZ HESAPLAMA SİSTEMİ ---
     void LevelCompleted()
     {
         isGameOver = true;
-        
-        // Yıldız Hesaplama (İstediğin kurala göre)
         int earnedStars = 0;
         if (movesMade <= targetMoves) earnedStars = 3;
         else if (movesMade == targetMoves + 1) earnedStars = 2;
         else if (movesMade >= targetMoves + 2) earnedStars = 1;
 
-        // Verileri Kaydet
         SaveProgress(earnedStars);
 
-        // Paneli Aç
-        if (winPanel != null) 
-        {
-            winPanel.SetActive(true);
-            
-            // İstersen WinPanel içine bir Text daha açıp yıldızları yazdırabilirsin:
-            // "⭐" "⭐⭐" vb. Bu kısmı UI tasarlarsan kodda ekleyebiliriz.
-        }
+        if (winPanel != null) winPanel.SetActive(true);
     }
 
     void SaveProgress(int starsEarned)
     {
-        // En yüksek yıldızı kaydet
         int currentRecord = PlayerPrefs.GetInt("LevelStars_" + currentLevelId, 0);
-        if (starsEarned > currentRecord)
-        {
-            PlayerPrefs.SetInt("LevelStars_" + currentLevelId, starsEarned);
-        }
+        if (starsEarned > currentRecord) PlayerPrefs.SetInt("LevelStars_" + currentLevelId, starsEarned);
 
-        // Kilit açma
         if (currentLevelId >= unlockedLevel)
         {
             unlockedLevel = currentLevelId + 1;
             PlayerPrefs.SetInt("UnlockedLevel", unlockedLevel);
         }
-        
         PlayerPrefs.Save();
-        GenerateLevelButtons(); // Arkaplanda buton listesini güncelle
+        GenerateLevelButtons();
     }
 
     public void CheckGameState()
     {
-        if (isGameOver) return; 
+        if (isGameOver) return;
 
         var aliveStones = activeStones.Where(s => !s.isDead).ToList();
-        
+
         if (aliveStones.Count == 1)
         {
+            if (isEndlessMode) { EndlessRoundWon(); return; }
+
             if (hasThrone)
             {
                 if (aliveStones[0].q == targetThrone.q && aliveStones[0].r == targetThrone.r) LevelCompleted();
-                else if (losePanel != null) { isGameOver = true; losePanel.SetActive(true); }
+                else
+                {
+                    isGameOver = true;
+                    if (losePanel != null) losePanel.SetActive(true);
+                    if (loseReasonText != null) loseReasonText.text = "Hedef tahta ulaşamadın!";
+                }
             }
             else LevelCompleted();
             return;
         }
 
-        // Kaybetme Sınırı Kontrolü (Hard Limit)
+        int rC = aliveStones.Count(s => s.type == 'T');
+        int pC = aliveStones.Count(s => s.type == 'K');
+        int sC = aliveStones.Count(s => s.type == 'M');
+
+        bool isDeadlock = (rC > 1 && pC == 0) || (pC > 1 && sC == 0) || (sC > 1 && rC == 0);
+
+        if (isDeadlock)
+        {
+            if (isEndlessMode) EndlessGameOver("Çözümsüz Durum! (Hatalı Hamle) 💀");
+            else
+            {
+                isGameOver = true;
+                if (losePanel != null) losePanel.SetActive(true);
+                if (loseReasonText != null) loseReasonText.text = "Çıkmaz Sokak! Kazanmak imkansız.";
+            }
+            return;
+        }
+
         if (movesMade >= hardLimitMoves)
         {
-            isGameOver = true;
-            if (losePanel != null) losePanel.SetActive(true);
+            if (isEndlessMode) EndlessGameOver("Hamle Hakkın Bitti! 💀");
+            else
+            {
+                isGameOver = true;
+                if (losePanel != null) losePanel.SetActive(true);
+                if (loseReasonText != null) loseReasonText.text = "Hamle sınırını aştın!";
+            }
         }
+    }
+
+    // --- BFS SOLVER (SONSUZ MOD İÇİN) ---
+    private class SolverState
+    {
+        public List<StoneSnapshot> stones;
+        public List<HexCoord> columns;
+        public List<HexCoord> walls;
+    }
+
+    private int? FindMinMovesBFS(List<StoneSnapshot> initStones, List<HexCoord> statWalls, List<HexCoord> sticky, List<HexCoord> initCols, List<OneWayEdge> oneWays, int playRadius)
+    {
+        var visited = new HashSet<string>();
+        var queue = new Queue<KeyValuePair<SolverState, int>>();
+
+        var startState = new SolverState { stones = new List<StoneSnapshot>(initStones), columns = new List<HexCoord>(initCols), walls = new List<HexCoord>() };
+        queue.Enqueue(new KeyValuePair<SolverState, int>(startState, 0));
+        visited.Add(GetStateHash(startState));
+
+        int[][] dirs = { new[] { 0, -1 }, new[] { 1, -1 }, new[] { 1, 0 }, new[] { 0, 1 }, new[] { -1, 1 }, new[] { -1, 0 } };
+
+        while (queue.Count > 0)
+        {
+            if (visited.Count > 3000) return null; 
+            var current = queue.Dequeue();
+            var state = current.Key;
+            int moves = current.Value;
+
+            if (moves > 10) return null;
+            if (state.stones.Count == 1) return moves;
+
+            foreach (var d in dirs)
+            {
+                var nextState = SimulateSolverMove(state, d[0], d[1], statWalls, sticky, oneWays, playRadius);
+                if (nextState != null)
+                {
+                    string hash = GetStateHash(nextState);
+                    if (!visited.Contains(hash))
+                    {
+                        visited.Add(hash);
+                        queue.Enqueue(new KeyValuePair<SolverState, int>(nextState, moves + 1));
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private SolverState SimulateSolverMove(SolverState state, int dq, int dr, List<HexCoord> statWalls, List<HexCoord> sticky, List<OneWayEdge> oneWays, int playRadius)
+    {
+        var newStones = state.stones.Select(s => new StoneSnapshot { q = s.q, r = s.r, type = s.type, isHeavy = s.isHeavy, bombTimer = s.bombTimer, isDead = s.isDead }).ToList();
+        var newCols = new List<HexCoord>(state.columns);
+        var newWalls = new List<HexCoord>(state.walls);
+        bool moved = false;
+
+        newStones.Sort((a, b) => (b.q * dq + b.r * dr).CompareTo(a.q * dq + a.r * dr));
+
+        for (int i = 0; i < newStones.Count; i++)
+        {
+            var stone = newStones[i];
+            if (stone.isDead) continue;
+            int cq = stone.q, cr = stone.r;
+
+            while (true)
+            {
+                int nq = cq + dq, nr = cr + dr;
+                if (Mathf.Max(Mathf.Abs(nq), Mathf.Abs(nr), Mathf.Abs(-nq - nr)) > playRadius) break;
+                if (statWalls.Exists(w => w.q == nq && w.r == nr) || newWalls.Exists(w => w.q == nq && w.r == nr)) break;
+
+                bool edgeBlocked = false;
+                foreach (var edge in oneWays)
+                {
+                    if ((edge.from.q == cq && edge.from.r == cr && edge.to.q == nq && edge.to.r == nr) ||
+                        (edge.from.q == nq && edge.from.r == nr && edge.to.q == cq && edge.to.r == cr))
+                    {
+                        if (!(cq == edge.from.q && cr == edge.from.r && nq == edge.to.q && nr == edge.to.r)) edgeBlocked = true;
+                    }
+                }
+                if (edgeBlocked) break;
+
+                bool isSticky = sticky.Exists(s => s.q == nq && s.r == nr);
+                bool isColumn = newCols.Exists(c => c.q == nq && c.r == nr);
+                var target = newStones.FirstOrDefault(s => s.q == nq && s.r == nr && !s.isDead);
+
+                if (target.type != '\0')
+                {
+                    if (Beats(stone.type, target.type))
+                    {
+                        var tIndex = newStones.FindIndex(s => s.q == nq && s.r == nr && !s.isDead);
+                        var temp = newStones[tIndex]; temp.isDead = true; newStones[tIndex] = temp;
+                        cq = nq; cr = nr; moved = true;
+                        if (isColumn) { newCols.RemoveAll(c => c.q == nq && c.r == nr); newWalls.Add(new HexCoord(nq, nr)); }
+                        if (isSticky || stone.isHeavy) break;
+                    }
+                    else break;
+                }
+                else
+                {
+                    cq = nq; cr = nr; moved = true;
+                    if (isColumn) { newCols.RemoveAll(c => c.q == nq && c.r == nr); newWalls.Add(new HexCoord(nq, nr)); }
+                    if (isSticky || stone.isHeavy) break;
+                }
+            }
+            stone.q = cq; stone.r = cr; newStones[i] = stone;
+        }
+
+        if (moved)
+        {
+            bool exploded = false;
+            for (int i = 0; i < newStones.Count; i++)
+            {
+                if (!newStones[i].isDead && newStones[i].bombTimer > 0)
+                {
+                    var temp = newStones[i];
+                    temp.bombTimer--;
+                    if (temp.bombTimer == 0) exploded = true;
+                    newStones[i] = temp;
+                }
+            }
+            if (exploded) return null; 
+            return new SolverState { stones = newStones.Where(s => !s.isDead).ToList(), columns = newCols, walls = newWalls };
+        }
+        return null;
+    }
+
+    private string GetStateHash(SolverState state)
+    {
+        var alive = state.stones.OrderBy(s => s.q).ThenBy(s => s.r).Select(s => $"{s.q},{s.r},{s.type},{s.bombTimer}");
+        var cols = state.columns.OrderBy(c => c.q).ThenBy(c => c.r).Select(c => $"{c.q},{c.r}");
+        var w = state.walls.OrderBy(x => x.q).ThenBy(x => x.r).Select(x => $"{x.q},{x.r}");
+        return string.Join(";", alive) + "|" + string.Join(",", cols) + "|" + string.Join(",", w);
     }
 }
