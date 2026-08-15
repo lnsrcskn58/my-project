@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.EventSystems; // YENİ: UI (Arayüz) tıklamalarını algılamak için gerekli
 
 public class SwipeManager : MonoBehaviour
 {
@@ -10,6 +11,17 @@ public class SwipeManager : MonoBehaviour
 
     void Update()
     {
+        // 1. KORUMA: Eğer oyuncu bir UI elemanına (Buton, ScrollView, Panel) dokunuyorsa işlemi iptal et
+        if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            return;
+
+        // Mobil dokunmatik için ekstra UI koruması
+        if (Input.touchCount > 0 && EventSystem.current != null)
+        {
+            if (EventSystem.current.IsPointerOverGameObject(Input.GetTouch(0).fingerId))
+                return;
+        }
+
         // 1. Bilgisayar (Mouse) Girdisi
         if (Input.GetMouseButtonDown(0))
         {
@@ -39,6 +51,13 @@ public class SwipeManager : MonoBehaviour
 
     void DetectSwipe()
     {
+        // 2. KORUMA: GameManager sahnede yoksa çökmesini engelle
+        if (GameManager.Instance == null) return;
+
+        // 3. KORUMA: Eğer Ana Menüde veya Bölüm Seçim ekranındaysak kaydırmayı engelle
+        if (GameManager.Instance.mainMenuPanel.activeSelf || GameManager.Instance.levelSelectPanel.activeSelf) 
+            return;
+
         Vector2 swipeDelta = endTouchPosition - startTouchPosition;
 
         if (swipeDelta.magnitude > swipeThreshold)
@@ -56,8 +75,6 @@ public class SwipeManager : MonoBehaviour
             else if (angle > -180 && angle <= -120){ dq = -1; dr = 1; }  // Sol Alt
             else                                   { dq = -1; dr = 0; }  // Sol Üst (angle > 120 veya <= -180)
 
-            Debug.Log($"Kaydırma -> Aç: {angle:F1} | Yön: dq={dq}, dr={dr}");
-            
             GameManager.Instance.ProcessMove(dq, dr);
         }
     }

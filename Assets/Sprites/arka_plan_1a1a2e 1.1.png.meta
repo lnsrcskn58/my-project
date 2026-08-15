@@ -1,10 +1,10 @@
 fileFormatVersion: 2
-guid: cad1fbe5ac0cee241a2226b1542ddbb3
+guid: 80967aa542dd1bf4b8b85d58c1129f09
 TextureImporter:
   internalIDToNameTable:
   - first:
-      213: 1956713530742083955
-    second: HexCellIkon_0
+      213: 880682373531422998
+    second: arka_plan_1a1a2e 1.1_0
   externalObjects: {}
   serializedVersion: 13
   mipmaps:
@@ -47,7 +47,7 @@ TextureImporter:
   lightmap: 0
   compressionQuality: 50
   spriteMode: 2
-  spriteExtrude: 0
+  spriteExtrude: 1
   spriteMeshType: 1
   alignment: 0
   spritePivot: {x: 0.5, y: 0.5}
@@ -126,23 +126,23 @@ TextureImporter:
     serializedVersion: 2
     sprites:
     - serializedVersion: 2
-      name: HexCellIkon_0
+      name: arka_plan_1a1a2e 1.1_0
       rect:
         serializedVersion: 2
-        x: 167
-        y: 240
-        width: 689
-        height: 572
+        x: 0
+        y: 0
+        width: 1024
+        height: 1536
       alignment: 0
-      pivot: {x: 0.5, y: 0.5}
+      pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
       customData: 
       outline: []
       physicsShape: []
       tessellationDetail: -1
       bones: []
-      spriteID: 371151fc694a72b10800000000000000
-      internalID: 1956713530742083955
+      spriteID: 611d942e3ffc83c00800000000000000
+      internalID: 880682373531422998
       vertices: []
       indices: 
       edges: []
@@ -151,7 +151,7 @@ TextureImporter:
     customData: 
     physicsShape: []
     bones: []
-    spriteID: 5683b6cdef7297145a02d03559c23de4
+    spriteID: 
     internalID: 0
     vertices: []
     indices: 
@@ -161,7 +161,7 @@ TextureImporter:
     spriteCustomMetadata:
       entries: []
     nameFileIdTable:
-      HexCellIkon_0: 1956713530742083955
+      arka_plan_1a1a2e 1.1_0: 880682373531422998
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 

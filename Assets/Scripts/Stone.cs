@@ -21,6 +21,7 @@ public class Stone : MonoBehaviour
     
     [Header("Modifikatör Görselleri")]
     public GameObject heavyIcon; // Ağırlık işareti (Örn: Çapa ikonu)
+    public GameObject bombIcon; // Bomba arka plan ikonu
     public TextMeshPro bombText; // Bomba geri sayım metni
 
     public void Initialize(int startQ, int startR, char stoneType, bool heavy = false, int bomb = -1)
@@ -46,7 +47,7 @@ public class Stone : MonoBehaviour
         transform.localRotation = Quaternion.Euler(0, 0, 30f);
     }
 
-    // Bomba sayacını ve ağırlık ikonunu güncelleyen metod
+    // Bomba sayacını, bomba ikonunu ve ağırlık ikonunu güncelleyen metod
     public void UpdateVisualModifiers()
     {
         if (heavyIcon != null) 
@@ -56,11 +57,15 @@ public class Stone : MonoBehaviour
         {
             if (bombTimer > 0)
             {
+                // Sayı 0'dan büyükse hem ikonu hem yazıyı aç
+                if (bombIcon != null) bombIcon.SetActive(true);
                 bombText.gameObject.SetActive(true);
                 bombText.text = bombTimer.ToString();
             }
             else
             {
+                // Bomba yoksa ikisini de gizle
+                if (bombIcon != null) bombIcon.SetActive(false);
                 bombText.gameObject.SetActive(false);
             }
         }

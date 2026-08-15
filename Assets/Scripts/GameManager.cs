@@ -72,7 +72,7 @@ public class GameManager : MonoBehaviour
     public int currentLevelId = 1;
     public int unlockedLevel = 1;
     public bool isGameOver = false;
-    public int currentPlayRadius; // Modlara göre dinamik değişen oyun alanı çapı
+    public int currentPlayRadius; 
     public List<Stone> activeStones = new List<Stone>();
     private List<GameObject> spawnedVisuals = new List<GameObject>();
     private Stack<GameStateSnapshot> undoStack = new Stack<GameStateSnapshot>();
@@ -107,7 +107,11 @@ public class GameManager : MonoBehaviour
 
     void Start()
     {
-        unlockedLevel = PlayerPrefs.GetInt("UnlockedLevel", 1);
+        // NORMAL KAYIT SİSTEMİ (Şimdilik yorum satırı yaptık, başına // koyduk)
+        // unlockedLevel = PlayerPrefs.GetInt("UnlockedLevel", 1);
+        
+        // YENİ TEST SATIRI: Oyunun kilidini çok yüksek bir sayıya sabitliyoruz
+        unlockedLevel = 999; 
 
         TextAsset jsonText = Resources.Load<TextAsset>("levels");
         if (jsonText != null)
@@ -116,9 +120,7 @@ public class GameManager : MonoBehaviour
             allLevelItems = allLevels.levels;
         }
 
-        // Ana menüde arka planın düzgün görünmesi için varsayılan çapta çizdiriyoruz
         gridManager.RedrawGrid(gridManager.gridRadius);
-
         GenerateLevelButtons();
         ShowMainMenu();
     }
@@ -175,7 +177,6 @@ public class GameManager : MonoBehaviour
         isTimerRunning = false;
         ClearBoard();
 
-        // Varsayılan çapa dönüp çizimi sıfırla
         gridManager.RedrawGrid(gridManager.gridRadius);
 
         if (mainMenuPanel != null) mainMenuPanel.SetActive(true);
@@ -193,15 +194,25 @@ public class GameManager : MonoBehaviour
         if (levelSelectPanel != null) levelSelectPanel.SetActive(true);
     }
 
-    public void StartGameFromMenu() { LoadSpecificLevel(unlockedLevel); }
+public void StartGameFromMenu() 
+    { 
+        // 999 hilesini değil, oyuncunun gerçekten kaldığı bölümü hafızadan çekiyoruz
+        int savedLevel = PlayerPrefs.GetInt("UnlockedLevel", 1);
 
+        // Eğer kaydedilen bölüm, JSON'daki toplam bölüm sayısını aşıyorsa (oyun bittiyse), son bölümü aç
+        if (allLevelItems != null && savedLevel > allLevelItems.Count)
+        {
+            savedLevel = allLevelItems.Count;
+        }
+
+        LoadSpecificLevel(savedLevel); 
+    }
     public void LoadSpecificLevel(int levelId)
     {
         if (levelId > unlockedLevel) return;
         isEndlessMode = false;
         currentLevelId = levelId;
         
-        // Oyun alanı çapını normal değere çek ve zeminleri yeniden çiz
         currentPlayRadius = gridManager.gridRadius;
         gridManager.RedrawGrid(currentPlayRadius);
 
@@ -224,7 +235,6 @@ public class GameManager : MonoBehaviour
         isTimerRunning = true;
         isGenerating = false;
 
-        // Oyun alanı çapını sonsuz mod için 1 azaltıp zemini yeniden çiziyoruz
         currentPlayRadius = Mathf.Max(1, gridManager.gridRadius - 1);
         gridManager.RedrawGrid(currentPlayRadius);
 
@@ -248,8 +258,10 @@ public class GameManager : MonoBehaviour
         int stoneCount = 3 + (endlessLevelCleared / 5);
         if (stoneCount > 5) stoneCount = 5;
 
+        // Engel Zorluk Seviyeleri
         bool useWalls = endlessLevelCleared >= 5;
         bool useSticky = endlessLevelCleared >= 10;
+        bool useOneWay = endlessLevelCleared >= 12; // YENİ: Tek yönlü duvarlar eklendi
         bool useColumn = endlessLevelCleared >= 15;
         bool useHeavy = endlessLevelCleared >= 20;
         bool useBomb = endlessLevelCleared >= 25;
@@ -258,20 +270,23 @@ public class GameManager : MonoBehaviour
         List<HexCoord> candidateWalls = new List<HexCoord>();
         List<HexCoord> candidateSticky = new List<HexCoord>();
         List<HexCoord> candidateColumn = new List<HexCoord>();
+        List<OneWayEdge> candidateOneWays = new List<OneWayEdge>();
+
+        int[][] dirs = { new[] { 0, -1 }, new[] { 1, -1 }, new[] { 1, 0 }, new[] { 0, 1 }, new[] { -1, 1 }, new[] { -1, 0 } };
 
         while (!solvable)
         {
             attempts++;
-            if (attempts > 50) { useWalls = false; useSticky = false; useColumn = false; useHeavy = false; useBomb = false; }
+            if (attempts > 50) { useWalls = false; useSticky = false; useOneWay = false; useColumn = false; useHeavy = false; useBomb = false; }
 
             candidateStones.Clear();
             candidateWalls.Clear();
             candidateSticky.Clear();
             candidateColumn.Clear();
+            candidateOneWays.Clear();
 
             List<HexCoord> emptyCells = new List<HexCoord>();
             
-            // Daraltılmış alan (currentPlayRadius) içindeki boş hücreleri bul
             for (int q = -currentPlayRadius; q <= currentPlayRadius; q++)
             {
                 for (int r = -currentPlayRadius; r <= currentPlayRadius; r++)
@@ -307,7 +322,27 @@ public class GameManager : MonoBehaviour
             if (useSticky) { int c = Random.Range(0, 2); for (int i = 0; i < c && obsIndex < emptyCells.Count; i++) candidateSticky.Add(emptyCells[obsIndex++]); }
             if (useColumn) { int c = Random.Range(0, 2); for (int i = 0; i < c && obsIndex < emptyCells.Count; i++) candidateColumn.Add(emptyCells[obsIndex++]); }
 
-            int? calculatedMinMoves = FindMinMovesBFS(candidateStones, candidateWalls, candidateSticky, candidateColumn, new List<OneWayEdge>(), currentPlayRadius);
+            // YENİ: Tek Yönlü Duvarları Rastgele Üretme
+            if (useOneWay)
+            {
+                int edgeCount = Random.Range(0, 3);
+                for (int i = 0; i < edgeCount; i++)
+                {
+                    int rq = Random.Range(-currentPlayRadius, currentPlayRadius + 1);
+                    int rr = Random.Range(-currentPlayRadius, currentPlayRadius + 1);
+                    if (Mathf.Max(Mathf.Abs(rq), Mathf.Abs(rr), Mathf.Abs(-rq - rr)) > currentPlayRadius) continue;
+                    
+                    int[] d = dirs[Random.Range(0, dirs.Length)];
+                    int nq = rq + d[0];
+                    int nr = rr + d[1];
+                    if (Mathf.Max(Mathf.Abs(nq), Mathf.Abs(nr), Mathf.Abs(-nq - nr)) > currentPlayRadius) continue;
+                    
+                    candidateOneWays.Add(new OneWayEdge(new HexCoord(rq, rr), new HexCoord(nq, nr)));
+                }
+            }
+
+            // Çözülebilirlik Testine (Solver) candidateOneWays listesi de gönderiliyor
+            int? calculatedMinMoves = FindMinMovesBFS(candidateStones, candidateWalls, candidateSticky, candidateColumn, candidateOneWays, currentPlayRadius);
             if (calculatedMinMoves.HasValue && calculatedMinMoves.Value > 0)
             {
                 minMoves = calculatedMinMoves.Value;
@@ -328,7 +363,7 @@ public class GameManager : MonoBehaviour
         stickyTiles = candidateSticky;
         columns = candidateColumn;
         dynamicWalls.Clear();
-        oneWayEdges.Clear();
+        oneWayEdges = candidateOneWays; // YENİ: Başarıyla üretilen duvarları oyuna ekle
 
         if (endlessRoundText != null) endlessRoundText.text = $"Sonsuz Mod - Raunt {endlessLevelCleared + 1}";
         if (winPanel != null) winPanel.SetActive(false);
@@ -468,7 +503,14 @@ public class GameManager : MonoBehaviour
         foreach (var w in walls) SpawnTile(w, wallPrefab);
         foreach (var dw in dynamicWalls) SpawnTile(dw, wallPrefab);
         foreach (var s in stickyTiles) SpawnTile(s, stickyPrefab);
-        foreach (var c in columns) SpawnTile(c, columnPrefab);
+        
+        // Sütunlara özel isim veriyoruz ki tetiklendiğinde sahnede bulabilelim
+        foreach (var c in columns) 
+        {
+            GameObject colObj = SpawnTile(c, columnPrefab);
+            if (colObj != null) colObj.name = $"Column_{c.q}_{c.r}";
+        }
+        
         foreach (var edge in oneWayEdges) SpawnOneWayVisual(edge);
     }
 
@@ -483,14 +525,15 @@ public class GameManager : MonoBehaviour
         undoStack.Clear();
     }
 
-    void SpawnTile(HexCoord coord, GameObject prefab)
+    GameObject SpawnTile(HexCoord coord, GameObject prefab)
     {
-        if (prefab == null) return;
+        if (prefab == null) return null;
         Vector2 localPos = gridManager.GetPixelCoords(coord.q, coord.r);
         GameObject tile = Instantiate(prefab, gridManager.transform);
         tile.transform.localPosition = localPos;
         tile.transform.localRotation = Quaternion.Euler(0, 0, 30f);
         spawnedVisuals.Add(tile);
+        return tile;
     }
 
     void SpawnOneWayVisual(OneWayEdge edge)
@@ -588,7 +631,6 @@ public class GameManager : MonoBehaviour
                 HexCoord currentCoord = new HexCoord(currentQ, currentR);
                 HexCoord nextCoord = new HexCoord(nextQ, nextR);
 
-                // Daraltılmış/varsayılan sınır kontrolü (currentPlayRadius)
                 if (Mathf.Max(Mathf.Abs(nextQ), Mathf.Abs(nextR), Mathf.Abs(-nextQ - nextR)) > currentPlayRadius) break;
                 if (walls.Contains(nextCoord) || dynamicWalls.Contains(nextCoord)) break;
                 if (IsEdgeBlocked(currentCoord, nextCoord)) break;
@@ -642,8 +684,20 @@ public class GameManager : MonoBehaviour
         return false;
     }
 
-    void HandleColumnDestroyed(HexCoord coord) { columns.Remove(coord); dynamicWalls.Add(coord); SpawnTile(coord, wallPrefab); }
+void HandleColumnDestroyed(HexCoord coord) 
+    { 
+        columns.Remove(coord); 
+        dynamicWalls.Add(coord); 
 
+        GameObject colObj = spawnedVisuals.FirstOrDefault(v => v != null && v.name == $"Column_{coord.q}_{coord.r}");
+        if (colObj != null)
+        {
+            Animator anim = colObj.GetComponentInChildren<Animator>();
+            if (anim != null) anim.SetTrigger("Yuksel");
+            
+            colObj.name = $"RisenColumn_{coord.q}_{coord.r}"; 
+        }
+    }
     void ProcessBombTimers()
     {
         foreach (Stone stone in activeStones)
