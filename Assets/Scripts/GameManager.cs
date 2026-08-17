@@ -120,7 +120,20 @@ public class GameManager : MonoBehaviour
             allLevelItems = allLevels.levels;
         }
 
-        gridManager.RedrawGrid(gridManager.gridRadius);
+        // --- YENİ EKLENEN KOD: OYUN ALANINI AŞAĞI KAYDIRMA ---
+        // GridManager'ın Y pozisyonunu doğrudan -3.5 (yaklaşık 350 piksel) olarak sabitliyoruz.
+        // Bu sayede içindeki tüm petekler otomatik olarak aşağıdan çizilmeye başlayacak.
+        if (gridManager != null)
+        {
+            gridManager.transform.position = new Vector3(
+                gridManager.transform.position.x, 
+                -1f, 
+                gridManager.transform.position.z
+            );
+        }
+        // -----------------------------------------------------
+
+        
         GenerateLevelButtons();
         ShowMainMenu();
     }
@@ -146,22 +159,66 @@ public class GameManager : MonoBehaviour
     public void GenerateLevelButtons()
     {
         if (allLevelItems == null || levelButtonPrefab == null || levelButtonContainer == null) return;
+        
+        // Önceki butonları temizle
         foreach (Transform child in levelButtonContainer) Destroy(child.gameObject);
 
-        foreach (var level in allLevelItems)
+        // --- GELİŞMİŞ ZİKZAK AYARLARI ---
+        float startY = -150f;  
+        
+        // BOŞLUKLARI BURADAN İSTEDİĞİN GİBİ KONTROL EDEBİLİRSİN:
+        float diagonalYSpacing = 145f; // Çapraz ilerlerken Y eksenindeki boşluk
+        float verticalYSpacing = 290f; // KENARLARDAKİ (dik inen) Y ekseni boşluğunu iyice artırdık!
+        float xOffset = 251.25f;  
+
+        float[] patternX = { -xOffset, 0f, xOffset, xOffset, 0f, -xOffset };
+        
+        float currentY = startY; 
+
+        for (int i = 0; i < allLevelItems.Count; i++)
         {
+            var level = allLevelItems[i];
             int lvlId = level.id;
             GameObject btnObj = Instantiate(levelButtonPrefab, levelButtonContainer);
+            
+            // --- MATEMATİK: Zikzak Pozisyonu Hesaplama ---
+            float xPos = patternX[i % 6];
+            
+            if (i > 0)
+            {
+                float prevX = patternX[(i - 1) % 6];
+                
+                if (xPos == prevX) 
+                {
+                    // Kenar noktası (Sağ->Sağ veya Sol->Sol) : Büyük boşluk
+                    currentY -= verticalYSpacing;
+                }
+                else
+                {
+                    // Çapraz geçiş : Normal boşluk
+                    currentY -= diagonalYSpacing;
+                }
+            }
+
+            // Butonu yerleştirme
+            RectTransform rect = btnObj.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0.5f, 1f); 
+            rect.anchorMax = new Vector2(0.5f, 1f);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.anchoredPosition = new Vector2(xPos, currentY);
+            // ---------------------------------------------
+
+            // Yazıları ve kilit durumunu ayarlama
             TextMeshProUGUI[] texts = btnObj.GetComponentsInChildren<TextMeshProUGUI>();
             if (texts.Length > 0) texts[0].text = lvlId.ToString();
 
             int stars = PlayerPrefs.GetInt("LevelStars_" + lvlId, 0);
             if (texts.Length > 1)
             {
-                if (lvlId > unlockedLevel) texts[1].text = "🔒";
-                else if (stars == 3) texts[1].text = "⭐⭐⭐";
-                else if (stars == 2) texts[1].text = "⭐⭐";
-                else if (stars == 1) texts[1].text = "⭐";
+                if (lvlId > unlockedLevel) texts[1].text = "-"; 
+                else if (stars == 3) texts[1].text = "***";
+                else if (stars == 2) texts[1].text = "**";
+                else if (stars == 1) texts[1].text = "*";
                 else texts[1].text = "Oynanmadı";
             }
 
@@ -169,15 +226,24 @@ public class GameManager : MonoBehaviour
             if (lvlId > unlockedLevel) btn.interactable = false;
             else btn.onClick.AddListener(() => LoadSpecificLevel(lvlId));
         }
+
+        // Scroll (Kaydırma) alanının boyutunu ayarla
+        RectTransform containerRect = levelButtonContainer.GetComponent<RectTransform>();
+        float totalHeight = Mathf.Abs(currentY) + 250f; // En alttaki rahatlama payını da biraz artırdık
+        containerRect.sizeDelta = new Vector2(containerRect.sizeDelta.x, totalHeight);
     }
 
     public void ShowMainMenu()
     {
         isEndlessMode = false;
         isTimerRunning = false;
+        
+        // Taşları temizle
         ClearBoard();
 
-        gridManager.RedrawGrid(gridManager.gridRadius);
+        // YENİ EKLENEN SATIR: Ana menüde zemin peteklerini temizle!
+        // (Eskiden burada RedrawGrid vardı, onu sildik ve ClearGrid yaptık)
+        if (gridManager != null) gridManager.ClearGrid();
 
         if (mainMenuPanel != null) mainMenuPanel.SetActive(true);
         if (levelSelectPanel != null) levelSelectPanel.SetActive(false);
@@ -187,14 +253,30 @@ public class GameManager : MonoBehaviour
         if (losePanel != null) losePanel.SetActive(false);
     }
 
+    // --- GÜNCELLENEN FONKSİYON: Menüye geçerken hem UI hem petekleri temizler ---
     public void ShowLevelSelect()
     {
         GenerateLevelButtons();
-        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        
         if (levelSelectPanel != null) levelSelectPanel.SetActive(true);
-    }
 
-public void StartGameFromMenu() 
+        // Arayüz panellerini kapat
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (levelModeUIPanel != null) levelModeUIPanel.SetActive(false);
+        if (endlessModeUIPanel != null) endlessModeUIPanel.SetActive(false);
+        if (winPanel != null) winPanel.SetActive(false);
+        if (losePanel != null) losePanel.SetActive(false);
+
+        // Oyunu durdur, taşları ve engelleri temizle
+        isGameOver = true;
+        ClearBoard();
+
+        // Arka plandaki boş petek zeminini tamamen temizle
+        if (gridManager != null) gridManager.ClearGrid();
+    }
+    // -------------------------------------------------------------------------
+
+    public void StartGameFromMenu() 
     { 
         // 999 hilesini değil, oyuncunun gerçekten kaldığı bölümü hafızadan çekiyoruz
         int savedLevel = PlayerPrefs.GetInt("UnlockedLevel", 1);
@@ -207,6 +289,7 @@ public void StartGameFromMenu()
 
         LoadSpecificLevel(savedLevel); 
     }
+    
     public void LoadSpecificLevel(int levelId)
     {
         if (levelId > unlockedLevel) return;
@@ -261,7 +344,7 @@ public void StartGameFromMenu()
         // Engel Zorluk Seviyeleri
         bool useWalls = endlessLevelCleared >= 5;
         bool useSticky = endlessLevelCleared >= 10;
-        bool useOneWay = endlessLevelCleared >= 12; // YENİ: Tek yönlü duvarlar eklendi
+        bool useOneWay = endlessLevelCleared >= 12; 
         bool useColumn = endlessLevelCleared >= 15;
         bool useHeavy = endlessLevelCleared >= 20;
         bool useBomb = endlessLevelCleared >= 25;
@@ -322,7 +405,6 @@ public void StartGameFromMenu()
             if (useSticky) { int c = Random.Range(0, 2); for (int i = 0; i < c && obsIndex < emptyCells.Count; i++) candidateSticky.Add(emptyCells[obsIndex++]); }
             if (useColumn) { int c = Random.Range(0, 2); for (int i = 0; i < c && obsIndex < emptyCells.Count; i++) candidateColumn.Add(emptyCells[obsIndex++]); }
 
-            // YENİ: Tek Yönlü Duvarları Rastgele Üretme
             if (useOneWay)
             {
                 int edgeCount = Random.Range(0, 3);
@@ -341,7 +423,6 @@ public void StartGameFromMenu()
                 }
             }
 
-            // Çözülebilirlik Testine (Solver) candidateOneWays listesi de gönderiliyor
             int? calculatedMinMoves = FindMinMovesBFS(candidateStones, candidateWalls, candidateSticky, candidateColumn, candidateOneWays, currentPlayRadius);
             if (calculatedMinMoves.HasValue && calculatedMinMoves.Value > 0)
             {
@@ -363,7 +444,7 @@ public void StartGameFromMenu()
         stickyTiles = candidateSticky;
         columns = candidateColumn;
         dynamicWalls.Clear();
-        oneWayEdges = candidateOneWays; // YENİ: Başarıyla üretilen duvarları oyuna ekle
+        oneWayEdges = candidateOneWays; 
 
         if (endlessRoundText != null) endlessRoundText.text = $"Sonsuz Mod - Raunt {endlessLevelCleared + 1}";
         if (winPanel != null) winPanel.SetActive(false);
@@ -504,7 +585,6 @@ public void StartGameFromMenu()
         foreach (var dw in dynamicWalls) SpawnTile(dw, wallPrefab);
         foreach (var s in stickyTiles) SpawnTile(s, stickyPrefab);
         
-        // Sütunlara özel isim veriyoruz ki tetiklendiğinde sahnede bulabilelim
         foreach (var c in columns) 
         {
             GameObject colObj = SpawnTile(c, columnPrefab);
@@ -684,7 +764,7 @@ public void StartGameFromMenu()
         return false;
     }
 
-void HandleColumnDestroyed(HexCoord coord) 
+    void HandleColumnDestroyed(HexCoord coord) 
     { 
         columns.Remove(coord); 
         dynamicWalls.Add(coord); 
@@ -698,6 +778,7 @@ void HandleColumnDestroyed(HexCoord coord)
             colObj.name = $"RisenColumn_{coord.q}_{coord.r}"; 
         }
     }
+    
     void ProcessBombTimers()
     {
         foreach (Stone stone in activeStones)

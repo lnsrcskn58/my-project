@@ -30,12 +30,8 @@ public class GridManager : MonoBehaviour
     // YENİ: Dışarıdan çağrıldığında mevcut zeminleri silip istenen çapa göre yeniden çizen fonksiyon
     public void RedrawGrid(int radius)
     {
-        // Önceki zeminleri temizle
-        foreach (var hex in backgroundHexes)
-        {
-            Destroy(hex);
-        }
-        backgroundHexes.Clear();
+        // Önceki zeminleri temizle (Artık aşağıdaki ClearGrid fonksiyonunu kullanıyoruz)
+        ClearGrid();
 
         // Yeni çapa göre zeminleri diz
         for (int q = -radius; q <= radius; q++)
@@ -55,5 +51,15 @@ public class GridManager : MonoBehaviour
                 }
             }
         }
+    }
+
+    // --- YENİ EKLENEN TEMİZLEME FONKSİYONU ---
+    public void ClearGrid()
+    {
+        foreach (var hex in backgroundHexes)
+        {
+            if (hex != null) Destroy(hex);
+        }
+        backgroundHexes.Clear();
     }
 }
